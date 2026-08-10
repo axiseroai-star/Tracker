@@ -31,10 +31,13 @@ cp .env.example .env.local   # already done for you in this checkout
 Open `.env.local` and fill in the `FILL-IN` values:
 
 - `NOTION_TOKEN` — the Internal Integration Secret from step 1.
+- `SESSION_SECRET` and `CRON_SECRET` — generate your own for each (commands are given
+  inline in the file); never reuse the values from `.env.example` or commit real ones.
+  `SESSION_SECRET` signs every login session (§20) and `CRON_SECRET` gates the three
+  `/api/cron/*` routes (§16e/§16g) — treat both as real credentials.
 
-That's the only one required to get logging in working — there's no app password to set
-(§20). Everything else (data source IDs, database URLs, a pre-generated `SESSION_SECRET`)
-is already filled in. `.env.local` is gitignored — it will never be committed.
+Data source IDs and database URLs are already filled in. `.env.local` is gitignored — it
+will never be committed.
 
 ### 3. Run it
 
