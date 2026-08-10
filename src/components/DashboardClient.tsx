@@ -14,7 +14,7 @@ import type { Role } from "@/lib/auth";
 
 type SortMode = "attainment" | "name";
 
-export default function DashboardClient({ role }: { role: Role }) {
+export default function DashboardClient({ role, person }: { role: Role; person: string }) {
   const router = useRouter();
   const [data, setData] = useState<DashboardResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -192,7 +192,7 @@ export default function DashboardClient({ role }: { role: Role }) {
         <PersonCommentsModal
           personName={commentsFor.person}
           comments={commentsFor.comments}
-          people={data ? data.people.map((p) => p.person) : []}
+          sessionPerson={person}
           onClose={() => setCommentsFor(null)}
         />
       )}

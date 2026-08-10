@@ -11,28 +11,25 @@ interface Thread {
 }
 
 /**
- * Member-facing comment thread (§13d, extended to two-way by §16d). Anyone
- * can reply — "Replying as: [Person]" is the same self-reported-identity
- * pattern /log already uses, since there's no per-member login (§13e). Edit/
- * delete only shows on a reply whose Author matches whoever's currently
- * selected in that dropdown; the server re-checks this independently
- * (see /api/comments/[id]) rather than trusting this as real access control.
+ * Member-facing comment thread (§13d, extended to two-way by §16d, identity
+ * verified by §20). Anyone logged in can reply — Author is their own
+ * verified session identity, not a self-picked dropdown anymore. Edit/
+ * delete only shows on a reply whose Author matches the session; the server
+ * re-checks this independently (see /api/comments/[id]) rather than
+ * trusting the button being hidden as real access control.
  */
 export default function PersonCommentsModal({
   personName,
   comments: initialComments,
-  people,
+  sessionPerson,
   onClose,
 }: {
   personName: string;
   comments: PersonComment[];
-  people: string[];
+  sessionPerson: string;
   onClose: () => void;
 }) {
   const [comments, setComments] = useState<PersonComment[]>(initialComments);
-  const [actingAs, setActingAs] = useState(
-    people.includes(personName) ? personName : people[0] ?? ""
-  );
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [busyThread, setBusyThread] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -95,14 +92,14 @@ export default function PersonCommentsModal({
 
   async function submitReply(logEntryId: string) {
     const text = (replyDrafts[logEntryId] ?? "").trim();
-    if (!text || !actingAs) return;
+    if (!text) return;
     setBusyThread(logEntryId);
     setError(null);
     try {
       const res = await fetch("/api/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logEntryId, comment: text, author: actingAs }),
+        body: JSON.stringify({ logEntryId, comment: text }),
       });
       const result = await res.json();
       if (!res.ok || !result.ok) throw new Error(result.error || "Failed to send reply.");
@@ -128,7 +125,7 @@ export default function PersonCommentsModal({
       const res = await fetch(`/api/comments/${encodeURIComponent(c.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comment: editText.trim(), actingAs }),
+        body: JSON.stringify({ comment: editText.trim() }),
       });
       const result = await res.json();
       if (!res.ok || !result.ok) throw new Error(result.error || "Failed to save edit.");
@@ -146,10 +143,7 @@ export default function PersonCommentsModal({
     setBusyThread(c.logEntryId);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/comments/${encodeURIComponent(c.id)}?actingAs=${encodeURIComponent(actingAs)}`,
-        { method: "DELETE" }
-      );
+      const res = await fetch(`/api/comments/${encodeURIComponent(c.id)}`, { method: "DELETE" });
       const result = await res.json();
       if (!res.ok || !result.ok) throw new Error(result.error || "Failed to delete.");
       await refreshThread(c.logEntryId);
@@ -176,20 +170,9 @@ export default function PersonCommentsModal({
           </button>
         </div>
 
-        <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm">
-          <label className="text-ink-muted">Replying as</label>
-          <select
-            value={actingAs}
-            onChange={(e) => setActingAs(e.target.value)}
-            className="h-8 rounded-lg border border-line bg-page px-2 text-sm text-ink"
-          >
-            {people.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
+        <p className="border-b border-line px-5 py-3 text-sm text-ink-muted">
+          Replying as <span className="font-medium text-ink">{sessionPerson}</span>
+        </p>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {error && <p className="mb-3 text-sm text-risk">{error}</p>}
@@ -240,7 +223,7 @@ export default function PersonCommentsModal({
                         ) : (
                           <p className="mt-1 text-sm text-ink">{c.comment}</p>
                         )}
-                        {editingId !== c.id && c.author === actingAs && (
+                        {editingId !== c.id && c.author === sessionPerson && (
                           <div className="mt-1.5 flex gap-3">
                             <button
                               onClick={() => startEdit(c)}

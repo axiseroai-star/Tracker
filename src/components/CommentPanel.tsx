@@ -10,14 +10,20 @@ interface Comment {
   commentedAt: string | null;
 }
 
-/** Modal comment thread for one Daily Log row (§13c, §16d) — admin only. Admin can edit/delete any comment. */
+/**
+ * Modal comment thread for one Daily Log row (§13c, §16d) — admin only.
+ * Admin can edit/delete any comment. Author is always the logged-in admin's
+ * own verified identity (§20c) — no author picker, nothing to self-report.
+ */
 export default function CommentPanel({
   logEntryId,
   title,
+  sessionPerson,
   onClose,
 }: {
   logEntryId: string;
   title: string;
+  sessionPerson: string;
   onClose: () => void;
 }) {
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -193,6 +199,7 @@ export default function CommentPanel({
         </div>
 
         <form onSubmit={handleSubmit} className="border-t border-line p-4">
+          <p className="mb-2 text-xs text-ink-muted">Commenting as {sessionPerson}</p>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}

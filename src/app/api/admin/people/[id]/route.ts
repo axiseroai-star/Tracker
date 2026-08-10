@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { requireAdminResponse } from "@/lib/auth";
-import { updatePerson } from "@/lib/notion";
+import { resetPersonPin, updatePerson } from "@/lib/notion";
 
-/** Toggle Active or edit Timezone (§18d). Never deletes the row. */
+/** Toggle Active, edit Timezone, and/or reset PIN (§18d, §20d). Never deletes the row. */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -20,7 +20,7 @@ export async function PATCH(
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const { active, timezone } = (body ?? {}) as Record<string, unknown>;
+  const { active, timezone, resetPin } = (body ?? {}) as Record<string, unknown>;
   if (active !== undefined && typeof active !== "boolean") {
     return NextResponse.json({ ok: false, error: "active must be a boolean." }, { status: 400 });
   }
@@ -37,15 +37,24 @@ export async function PATCH(
       );
     }
   }
-  if (active === undefined && timezone === undefined) {
+  if (resetPin !== undefined && resetPin !== true) {
+    return NextResponse.json({ ok: false, error: "resetPin must be true." }, { status: 400 });
+  }
+  if (active === undefined && timezone === undefined && resetPin === undefined) {
     return NextResponse.json({ ok: false, error: "Nothing to update." }, { status: 400 });
   }
 
   try {
-    await updatePerson(id, {
-      active,
-      timezone: typeof timezone === "string" ? timezone.trim() : undefined,
-    });
+    if (active !== undefined || timezone !== undefined) {
+      await updatePerson(id, {
+        active,
+        timezone: typeof timezone === "string" ? timezone.trim() : undefined,
+      });
+    }
+    // §20d: clears PIN Hash — that person's next login re-triggers "Create your PIN."
+    if (resetPin === true) {
+      await resetPersonPin(id);
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error(

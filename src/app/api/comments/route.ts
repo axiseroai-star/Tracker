@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** A reply — always tagged with the submitted Author and Visible To Person = true (§16d). */
+/**
+ * A reply — Author is the verified session identity (§20c), never a
+ * client-submitted value; Visible To Person is always true for a reply.
+ */
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
@@ -42,7 +45,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const { logEntryId, comment, author } = (body ?? {}) as Record<string, unknown>;
+  const { logEntryId, comment } = (body ?? {}) as Record<string, unknown>;
 
   if (typeof logEntryId !== "string" || logEntryId.length === 0) {
     return NextResponse.json({ ok: false, error: "logEntryId is required." }, { status: 400 });
@@ -50,15 +53,12 @@ export async function POST(request: NextRequest) {
   if (typeof comment !== "string" || comment.trim().length === 0) {
     return NextResponse.json({ ok: false, error: "Comment text is required." }, { status: 400 });
   }
-  if (typeof author !== "string" || author.trim().length === 0) {
-    return NextResponse.json({ ok: false, error: "Author is required." }, { status: 400 });
-  }
 
   try {
     await createComment({
       logEntryId,
       comment: comment.trim().slice(0, 2000),
-      author: author.trim(),
+      author: session.person,
       visibleToPerson: true,
     });
     return NextResponse.json({ ok: true });

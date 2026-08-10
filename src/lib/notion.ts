@@ -446,6 +446,13 @@ export async function deleteComment(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // People (§18a) — replaces the hardcoded PEOPLE/PERSON_TIMEZONES constants.
 // Cached the same way Targets is.
+//
+// Note on `PIN Hash` (§20a): it is deliberately NOT part of PersonRecord or
+// this cache. Only `hasPin` (a boolean — does one exist, not what it is)
+// travels through the broadly-used, sometimes-client-facing PersonRecord.
+// The actual hash is only ever fetched fresh, uncached, by
+// getPersonAuthByName — used exclusively inside /api/auth/login — so it
+// never sits in memory longer than a single login request needs it.
 // ---------------------------------------------------------------------------
 
 const PEOPLE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -470,11 +477,67 @@ export async function queryAllPeople(): Promise<PersonRecord[]> {
       timezone,
       active: checkboxValue(page.properties, "Active"),
       slackHandle: slackHandle || null,
+      isAdmin: checkboxValue(page.properties, "Is Admin"),
+      hasPin: richTextValue(page.properties, "PIN Hash").length > 0,
     });
   }
 
   peopleCache = { data: rows, fetchedAt: Date.now() };
   return rows;
+}
+
+export interface PersonAuthRecord {
+  id: string;
+  name: string;
+  timezone: string;
+  active: boolean;
+  isAdmin: boolean;
+  pinHash: string | null;
+}
+
+/**
+ * §20b login only — fetched fresh (never cached) directly by Name, and
+ * never returned from an API route. `pinHash` is the one place this raw
+ * value travels through the app at all.
+ */
+export async function getPersonAuthByName(name: string): Promise<PersonAuthRecord | null> {
+  const pages = await queryAllPages(PEOPLE_DATA_SOURCE_ID(), {
+    property: "Name",
+    title: { equals: name },
+  });
+  const page = pages[0];
+  if (!page) return null;
+
+  const timezone = richTextValue(page.properties, "Timezone");
+  if (!timezone) return null;
+  const pinHash = richTextValue(page.properties, "PIN Hash");
+
+  return {
+    id: page.id,
+    name,
+    timezone,
+    active: checkboxValue(page.properties, "Active"),
+    isAdmin: checkboxValue(page.properties, "Is Admin"),
+    pinHash: pinHash || null,
+  };
+}
+
+/** §20b — saves a newly-created PIN hash on first login. */
+export async function setPersonPin(id: string, pinHash: string): Promise<void> {
+  await notion().pages.update({
+    page_id: id,
+    properties: { "PIN Hash": { rich_text: [{ text: { content: pinHash } }] } },
+  });
+  clearPeopleCache();
+}
+
+/** §20d — admin's "Reset PIN": clears the hash so the next login re-triggers "Create your PIN." */
+export async function resetPersonPin(id: string): Promise<void> {
+  await notion().pages.update({
+    page_id: id,
+    properties: { "PIN Hash": { rich_text: [] } },
+  });
+  clearPeopleCache();
 }
 
 export function clearPeopleCache(): void {

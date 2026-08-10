@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { requireAdminResponse } from "@/lib/auth";
+import { getSession, requireAdminResponse } from "@/lib/auth";
 import { createComment, queryCommentsForLogEntry } from "@/lib/notion";
 
 /** Every comment (visible or not) on one Daily Log row — admin only. */
@@ -25,10 +25,12 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** New comments default to Visible To Person = true (§13b). */
+/** New comments default to Visible To Person = true (§13b). Author is the admin's own verified identity (§20c). */
 export async function POST(request: NextRequest) {
   const denied = await requireAdminResponse();
   if (denied) return denied;
+  const session = await getSession();
+  if (!session) return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
 
   let body: unknown;
   try {
@@ -56,7 +58,7 @@ export async function POST(request: NextRequest) {
     await createComment({
       logEntryId,
       comment: comment.trim().slice(0, 2000),
-      author: "Admin",
+      author: session.person,
       visibleToPerson,
     });
     return NextResponse.json({ ok: true });

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { effectiveDate } from "@/lib/aggregate";
 import { DAY_CUTOFF_HOUR } from "@/lib/constants";
-import type { Role } from "@/lib/auth";
 
 export interface EntryFormPerson {
   name: string;
@@ -15,23 +14,35 @@ type ToastState = { kind: "success" | "error"; message: string } | null;
 const CUTOFF_LABEL = `${((DAY_CUTOFF_HOUR + 11) % 12) + 1}${DAY_CUTOFF_HOUR < 12 ? "am" : "pm"}`;
 
 export default function EntryForm({
-  role,
+  mode,
+  sessionPerson,
   people,
   personChannels,
 }: {
-  role: Role;
+  /**
+   * "self" — /log, for everyone including admins: Person is fixed to the
+   * logged-in identity, Date is locked (§14b, §20c). "any" — admin's
+   * dedicated "log for anyone" section in /admin: full Person dropdown,
+   * Date fully editable. This is driven by *which form this is*, not by
+   * role — an admin visiting /log still only logs as themselves; the "any"
+   * privilege only exists inside the /admin-only embedded instance.
+   */
+  mode: "self" | "any";
+  /** Required when mode === "self" — the verified session identity (§20c). */
+  sessionPerson?: string;
   /** The live Active roster (§18) — fetched server-side by the page that renders this form. */
   people: EntryFormPerson[];
   /** person name -> their currently-loggable (non-archived) channels (§18b). */
   personChannels: Record<string, string[]>;
 }) {
-  const isLocked = role === "member";
-  const firstPerson = people[0]?.name ?? "";
+  const isLocked = mode === "self";
+  const initialPerson = isLocked ? (sessionPerson ?? "") : (people[0]?.name ?? "");
+  const initialTimezone = people.find((p) => p.name === initialPerson)?.timezone;
 
-  const [person, setPerson] = useState(firstPerson);
-  const [channel, setChannel] = useState(personChannels[firstPerson]?.[0] ?? "");
+  const [person, setPerson] = useState(initialPerson);
+  const [channel, setChannel] = useState(personChannels[initialPerson]?.[0] ?? "");
   const [date, setDate] = useState(() =>
-    firstPerson ? effectiveDate(people[0].timezone) : ""
+    initialTimezone ? effectiveDate(initialTimezone) : ""
   );
   const [outputCount, setOutputCount] = useState("");
   const [notes, setNotes] = useState("");
@@ -48,9 +59,9 @@ export default function EntryForm({
     // field is ever briefly invalid/stale for the newly-selected person.
     setChannel(nextChannels[0] ?? "");
     const nextPerson = people.find((p) => p.name === nextName);
-    // §14b: re-anchor to the new person's own "today" — for members this is
-    // the only value the locked field will ever show; for admin it's just a
-    // sensible starting point they're free to change afterward.
+    // §14b: re-anchor to the new person's own "today" — for "self" mode
+    // this is the only value the locked field will ever show; for "any" it's
+    // just a sensible starting point admin is free to change afterward.
     if (nextPerson) setDate(effectiveDate(nextPerson.timezone));
   }
 
@@ -94,9 +105,9 @@ export default function EntryForm({
       }
 
       setToast({ kind: "success", message: `Logged ${countNum} for ${channel}.` });
-      // Person (and, for admin, whatever Date they set) stays put for fast
-      // repeat entry — everything else resets. Members' date is locked to
-      // effectiveDate(person) anyway, so re-setting it here is a no-op.
+      // Person (and, in "any" mode, whatever Date was set) stays put for
+      // fast repeat entry — everything else resets. "self" mode's date is
+      // locked to effectiveDate(person) anyway, so re-setting it is a no-op.
       setChannel(allowedChannels[0] ?? "");
       setOutputCount("");
       setNotes("");
@@ -112,7 +123,7 @@ export default function EntryForm({
     }
   }
 
-  if (people.length === 0) {
+  if (mode === "any" && people.length === 0) {
     return (
       <div className="rounded-card border border-dashed border-line bg-card p-6 text-center text-sm text-ink-muted">
         No active team members yet — add one in /admin&apos;s Team section first.
@@ -140,21 +151,25 @@ export default function EntryForm({
         className="space-y-5 rounded-card border border-line bg-card p-5 sm:p-6"
       >
         <div>
-          <label htmlFor="person" className="mb-1.5 block text-sm font-medium text-ink">
-            Person
-          </label>
-          <select
-            id="person"
-            value={person}
-            onChange={(e) => handlePersonChange(e.target.value)}
-            className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
-          >
-            {people.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <label className="mb-1.5 block text-sm font-medium text-ink">Person</label>
+          {mode === "self" ? (
+            <p className="flex h-12 w-full items-center rounded-lg border border-line bg-page px-3 text-base font-medium text-ink">
+              {person || "—"}
+            </p>
+          ) : (
+            <select
+              id="person"
+              value={person}
+              onChange={(e) => handlePersonChange(e.target.value)}
+              className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+            >
+              {people.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div>
@@ -163,7 +178,8 @@ export default function EntryForm({
           </label>
           {allowedChannels.length === 0 ? (
             <p className="rounded-lg border border-dashed border-line bg-page px-3 py-3 text-sm text-ink-muted">
-              {person} has no active responsibilities yet — add one in /admin first.
+              {person || "This person"} has no active responsibilities yet — add one in /admin
+              first.
             </p>
           ) : (
             <select
@@ -235,7 +251,7 @@ export default function EntryForm({
 
         <button
           type="submit"
-          disabled={submitting || allowedChannels.length === 0}
+          disabled={submitting || allowedChannels.length === 0 || !person}
           className="flex h-12 w-full items-center justify-center rounded-lg bg-accent text-base font-semibold text-white transition-opacity disabled:opacity-60"
         >
           {submitting ? "Saving…" : "Log entry"}

@@ -6,7 +6,9 @@ output against their targets — one shared web app, backed by Notion.
 - Next.js 16 (App Router, TypeScript), Tailwind CSS v4, Recharts
 - Data lives in four Notion data sources (`Axisero Targets`, `Axisero Daily Log`,
   `Axisero Comments`, `Axisero People`)
-- Two shared passwords — `APP_PASSWORD` (member) and `ADMIN_PASSWORD` (admin) — no per-user accounts
+- **Per-person PIN login (§20).** No shared password — everyone picks their own name at
+  `/login` and sets/enters their own 4-6 digit PIN. `role` comes from an `Is Admin` flag
+  on their own record, not a second shared password. See "Per-person login" below.
 - All Notion access happens server-side; the integration token never reaches the browser
 - **The team roster is live Notion data, not code (§18).** There's no hardcoded person or
   channel list anywhere — admin manages who's on the team and what they're responsible
@@ -29,11 +31,10 @@ cp .env.example .env.local   # already done for you in this checkout
 Open `.env.local` and fill in the `FILL-IN` values:
 
 - `NOTION_TOKEN` — the Internal Integration Secret from step 1.
-- `APP_PASSWORD` — whatever password the team should use to log in (grants `role: "member"`).
-- `ADMIN_PASSWORD` — a separate password for privileged access (grants `role: "admin"`, unlocks `/admin`). Keep it different from `APP_PASSWORD` and don't share it with the team.
 
-Everything else (data source IDs, database URLs, a pre-generated `SESSION_SECRET`) is
-already filled in. `.env.local` is gitignored — it will never be committed.
+That's the only one required to get logging in working — there's no app password to set
+(§20). Everything else (data source IDs, database URLs, a pre-generated `SESSION_SECRET`)
+is already filled in. `.env.local` is gitignored — it will never be committed.
 
 ### 3. Run it
 
@@ -83,19 +84,21 @@ cookie every other route uses).
 ```
 src/
   app/
-    login/page.tsx          Password gate (member or admin, same form)
-    page.tsx                 Dashboard (default landing page) — Server Component, resolves role
-    log/page.tsx              Daily entry form
+    login/page.tsx          Per-person PIN login — pick a name, create/enter your PIN (§20)
+    page.tsx                 Dashboard (default landing page) — Server Component, resolves session
+    log/page.tsx              Daily entry form — Person is your own session identity, not a pick
     targets/page.tsx          Read-only targets view (members)
     trends/page.tsx            Per-person output over 30/90 days (§16a)
     meeting/page.tsx            Chrome-free, large-text dashboard subset for screen-share (§16i)
     admin/page.tsx             Admin console — Server Component, redirects non-admins (§13a)
     api/
-      auth/login|logout/       Session cookie issue/clear (role- and ADMIN_PASSWORDS-aware, §16f)
+      auth/people/               GET the Active roster + whether each has a PIN yet — pre-auth (§20b)
+      auth/login|logout/         Create/verify a PIN and issue the session, or clear it (§20b)
       dashboard/                Aggregated dashboard JSON (via lib/dashboard-data.ts)
       targets/                  Targets grouped by the live Active roster
       trends/                    Per-person daily output over N days (§16a)
-      log/                      Create a Daily Log entry (any active person — see §13e note below)
+      log/                      Create a Daily Log entry — self always allowed; another person
+                                   only if the session is admin (§20c)
       admin/entries/             GET full history (incl. archived) — admin only
       admin/entries/[id]/         PATCH archived/flagged — admin only
       admin/comments/             GET all (incl. hidden) comments for a row — admin only
@@ -103,9 +106,9 @@ src/
       admin/targets/[id]/         PATCH Daily Target and/or Archived — admin only
       admin/target-suggestions/    GET 14-day recent averages per person/channel (§16c)
       admin/people/                GET all people / POST add a team member — admin only
-      admin/people/[id]/           PATCH Active/Timezone — admin only
-      comments/                    GET visible thread / POST a reply — any session (§16d)
-      comments/[id]/               PATCH/DELETE — admin, or the reply's own Author
+      admin/people/[id]/           PATCH Active/Timezone/resetPin — admin only (§18d, §20d)
+      comments/                    GET visible thread / POST a reply — any session, Author = session identity (§16d, §20c)
+      comments/[id]/               PATCH/DELETE — admin, or the reply's own Author (verified via session, §20c)
       cron/backup/                 Weekly CSV email via Resend — CRON_SECRET-protected (§16e)
       cron/nudge/                   Hourly per-person Slack nudge check (§16g)
       cron/digest/                  Weekly Slack KPI digest (§16g)
@@ -118,7 +121,9 @@ src/
     slack.ts                    Incoming-webhook post + @mention formatting (server-only)
     constants.ts                DAY_CUTOFF_HOUR, NUDGE_HOUR, STATUS, avatarColorForName
                                  (no more PEOPLE/CHANNELS/PERSON_CHANNELS — see §18 below)
-    auth.ts                     Signed session cookie helpers, roles, admin + cron guards (server-only)
+    pin.ts                      bcrypt hash/verify + PIN format check (server-only, §20a)
+    auth.ts                     Signed session cookie helpers ({person, role}), admin + cron
+                                 guards (server-only) — no more password resolution (§20)
     rate-limit.ts                In-memory limiter for /api/auth/login
   components/                  KpiCard, PersonCard, WeeklyBarChart, ChannelMatrix, …
                                  AdminEntriesTable, AdminTargetsPanel, AdminTeamPanel,
@@ -155,15 +160,18 @@ attainment     = target === 0 ? null : actual / target
 status         = null → No Target · ≥100% → On Track · 70–99% → Behind · <70% → At Risk
 ```
 
-**No backdating for members, admin keeps full override (§14b):** on `/log`, once
-Person is selected the Date field is set to `effectiveDate(person)` and locked
-(disabled) for `role === "member"` — they can't type in an arbitrary date at all.
-`/api/log` independently recomputes `effectiveDate(person)` server-side and rejects
-(400) any member submission whose date doesn't match — the client-side lock is a UX
-nicety, never the actual enforcement. Admin's "log for anyone" form (in `/admin`, same
-`EntryForm` component, same `/api/log` endpoint) keeps the Date field fully editable,
-and the server-side check is skipped entirely when `role === "admin"` — that's the only
-path missed-day backfills go through.
+**No backdating when acting as yourself; admin keeps full override when acting as someone
+else (§14b, §20c):** `/log`'s `EntryForm` always renders in `mode="self"` — Person is a
+fixed label read from the session identity, Date is set to `effectiveDate(person)` and
+locked (disabled). This applies to *everyone*, admins included — an admin visiting `/log`
+still only logs as themselves. `/api/log` independently derives whether a submission is
+"acting as self" by comparing the submitted person to the session's own identity (never a
+client-supplied flag): if they match, it recomputes `effectiveDate` server-side and
+rejects (400) anything that doesn't match, regardless of role. If they don't match, the
+request is only allowed when the session's role is admin (403 otherwise) — that's
+`/admin`'s dedicated "log for anyone" form (`mode="any"`, a full Person dropdown, Date
+fully editable), the one deliberate exception, and the only path missed-day backfills go
+through.
 
 The dashboard route makes four Notion queries per load — Daily Log (one date range
 buffered wide enough to cover every person's own window regardless of timezone, plus
@@ -202,11 +210,39 @@ write). Admin manages all of it from `/admin`, no code change or redeploy requir
   at least one responsibility for them — the entry form says so plainly rather than
   showing an empty channel dropdown.
 
+## Per-person login (§20)
+
+There's no shared password anymore. `/login` fetches the Active roster from `Axisero
+People` (`/api/auth/people`, pre-auth — names and whether each already has a PIN, nothing
+sensitive) and shows it as a list of names to pick from:
+
+- **First login** — no `PIN Hash` on that person's row yet: "Create your PIN" prompts for
+  a 4-6 digit PIN plus a confirmation. The server (never the client) decides this is a
+  create, not a verify, purely from whether a hash already exists — bcrypt-hashes it
+  (`lib/pin.ts`, 10 salt rounds) and saves it to their `Axisero People` row, then logs
+  them in. This is how everyone bootstraps their own credential; no admin has to
+  pre-generate or distribute anything.
+- **Returning login** — `PIN Hash` already set: "Enter your PIN," bcrypt-compared against
+  the stored hash server-side.
+- The session cookie now carries `{ person, role, iat }` — `role` is read from that
+  person's `Is Admin` checkbox at login time, the same server-side-enforced pattern as
+  before (§13a), just sourced from a per-person flag instead of which of two shared
+  passwords was typed. **Ahsan Aftab is pre-set to `Is Admin: true`**, so there's a
+  working admin from the very first login.
+- **Forgot your PIN?** No email/SMS reset in v1 (that needs a delivery mechanism this app
+  doesn't have yet). Instead, `/admin`'s Team section has a **Reset PIN** button per
+  person (§20d) — it clears their `PIN Hash`, and their next login goes through "Create
+  your PIN" again, same as a first login.
+- PIN brute-forcing is a real consideration (4-6 digits is much lower entropy than a
+  chosen password) — the same IP rate limit as before (5 attempts/minute) still applies
+  to `/api/auth/login`, and bcrypt's inherent per-attempt cost is the other half of the
+  mitigation.
+
 ## Admin role
 
-Logging in with `ADMIN_PASSWORD` instead of `APP_PASSWORD` grants `role: "admin"` on the
-session cookie (same login form, same cookie mechanism — just a second password checked
-in `/api/auth/login`). Admins get an **Admin** link in the nav leading to `/admin`, which:
+`role: "admin"` now comes from a person's own `Is Admin` flag rather than a second shared
+password (see "Per-person login" above). Admins get an **Admin** link in the nav leading
+to `/admin`, which:
 
 - **Team** and **Responsibilities** sections — see "Dynamic team & responsibilities" above.
 - Shows every Daily Log row ever created (not just the rolling 7-day window), with
@@ -234,11 +270,13 @@ dashboard's fetched window) have a visible comment, their person card on `/` sho
 small 💬 count badge — comments aren't invisible to the person they're about, even
 though there's no per-user login to scope a personal view to.
 
-**Trust note (§13e):** nothing in the schema stops a regular member from picking
-someone else's name on `/log` — that was true before the admin role existed and remains
-true after. The admin role adds extra powers on top of the shared entry form; it
-doesn't add new restrictions on top of what members could already do. Real per-person
-restrictions would require actual per-person accounts, which is out of scope (see below).
+**Formerly a trust note, now resolved by §20:** earlier versions of this app (§13e, §16d)
+had no real per-person login, so nothing stopped someone from picking a different name on
+`/log` or a comment reply — that was a documented, accepted tradeoff of the shared-password
+model at the time, not an oversight. Per-person PIN login (§20) closes that gap: `/log`'s
+Person field is read from a verified session identity, not a free pick, and `/api/log`
+enforces server-side that acting as someone else requires `role === "admin"` — the one
+remaining, deliberate exception (admin's "log for anyone" form), not a general gap anymore.
 
 ## Trends and streaks (§16a, §16b)
 
@@ -252,17 +290,16 @@ computed from the same buffered Daily Log fetch the rest of the dashboard alread
 (no extra Notion call), so it's only as accurate as that fetch's lookback window
 (~35 days) before it silently caps out.
 
-## Two-way comments (§16d)
+## Two-way comments (§16d, §20c)
 
-Comments gained an `Author` field (a person's name, or `"Admin"`). Anyone — member or
-admin — can reply to a comment thread on any person's card; since there's no per-member
-login, the UI prompts "Replying as: [Person]" the same way `/log` does, and tags the new
-row with that name plus `Visible To Person = true`. Edit/delete works for admin (any
-comment) or for whoever is currently selected as "Replying as" on their own replies —
-enforced server-side in `/api/comments/[id]` by comparing the submitted `actingAs`
-against the comment's real `Author`, not just by hiding the buttons client-side. This
-is the same shared-password trust model as §13e: the app can't cryptographically verify
-who's typing, and that's an accepted tradeoff of this design, not a new gap.
+Comments have an `Author` field (a person's name — historical rows created by the old
+shared-password admin flow may still show the literal string `"Admin"`). Anyone — member
+or admin — can reply to a comment thread on any person's card; `Author` is read directly
+from the session identity now (§20c), not a "Replying as" dropdown — there's nothing to
+pick, since login already established who's typing. Edit/delete works for admin (any
+comment) or for whoever's session identity matches that comment's `Author` — enforced
+server-side in `/api/comments/[id]` against the verified session, not a client-submitted
+claim.
 
 ## Installable app & meeting view (§16h, §16i)
 
@@ -285,12 +322,14 @@ npm run build
 
 ## Out of scope for v1
 
-Per-user Notion accounts (so `/log` still can't restrict "you can only log as
-yourself" — see the trust note above). A ranked leaderboard was deliberately left out —
-easy to build, but risks souring team dynamics for whoever's currently at risk; revisit
-only if explicitly asked again. WhatsApp nudges were scoped down to Slack-only for this
-round — the WhatsApp Business API needs phone verification and template approval, a
-meaningfully bigger project than a Slack webhook. Everything else that used to be listed
-here (editing/archiving Daily Log entries, editing Targets, historical trend views,
-notifications) now exists in some admin-gated or role-appropriate form — see the
-sections above.
+Per-user *Notion* accounts / OAuth login — §20's PIN login gives everyone a verified
+identity without needing that; full Notion seats remain unnecessary. Self-service PIN
+reset via email/SMS (no delivery mechanism yet — an admin resets it for you instead, see
+"Per-person login" above). A ranked leaderboard was deliberately left out — easy to
+build, but risks souring team dynamics for whoever's currently at risk; revisit only if
+explicitly asked again. WhatsApp nudges were scoped down to Slack-only for this round —
+the WhatsApp Business API needs phone verification and template approval, a meaningfully
+bigger project than a Slack webhook. Everything else that used to be listed here
+(editing/archiving Daily Log entries, editing Targets, historical trend views,
+notifications, "you can only log as yourself") now exists in some admin-gated or
+identity-verified form — see the sections above.

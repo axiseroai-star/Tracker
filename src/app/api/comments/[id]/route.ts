@@ -4,28 +4,20 @@ import { deleteComment, queryCommentById, updateComment } from "@/lib/notion";
 import { getSession } from "@/lib/auth";
 
 /**
- * §16d edit/delete: admin can act on any comment; a member can only act on a
- * comment whose Author matches whoever they've self-reported as "acting as"
- * in the reply UI. This is the same shared-password trust model documented
- * in §13e/§16d — the app can't cryptographically verify who's typing, but it
- * still checks the claim server-side rather than trusting a hidden button.
+ * §16d/§20 edit/delete: admin can act on any comment; a member can only act
+ * on a comment whose Author matches their own verified session identity —
+ * no more self-reported "acting as," since login now proves who's typing.
  */
-async function checkPermission(
-  commentId: string,
-  actingAs: unknown
-): Promise<NextResponse | null> {
+async function checkPermission(commentId: string): Promise<NextResponse | null> {
   const session = await getSession();
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
   if (session.role === "admin") return null;
 
-  if (typeof actingAs !== "string" || actingAs.length === 0) {
-    return NextResponse.json({ ok: false, error: "actingAs is required." }, { status: 400 });
-  }
   const existing = await queryCommentById(commentId);
   if (!existing) {
     return NextResponse.json({ ok: false, error: "Comment not found." }, { status: 404 });
   }
-  if (existing.author !== actingAs) {
+  if (existing.author !== session.person) {
     return NextResponse.json(
       { ok: false, error: "You can only edit or delete your own replies." },
       { status: 403 }
@@ -46,9 +38,9 @@ export async function PATCH(
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
-  const { comment, actingAs } = (body ?? {}) as Record<string, unknown>;
+  const { comment } = (body ?? {}) as Record<string, unknown>;
 
-  const denied = await checkPermission(id, actingAs);
+  const denied = await checkPermission(id);
   if (denied) return denied;
 
   if (typeof comment !== "string" || comment.trim().length === 0) {
@@ -72,9 +64,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const actingAs = request.nextUrl.searchParams.get("actingAs");
 
-  const denied = await checkPermission(id, actingAs);
+  const denied = await checkPermission(id);
   if (denied) return denied;
 
   try {

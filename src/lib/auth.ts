@@ -5,17 +5,22 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * Single shared-password session, per the build spec — no per-user accounts.
- * The cookie carries a signed (HMAC-SHA256) JSON payload — an issue timestamp
- * and a role, never the password itself. Signing key is SESSION_SECRET.
+ * Per-person PIN login (§20). The session cookie carries a signed
+ * (HMAC-SHA256) JSON payload — the logged-in person's name, their role, and
+ * an issue timestamp — never a password or PIN. Signing key is
+ * SESSION_SECRET.
  *
- * Two shared passwords now exist (§13a): APP_PASSWORD -> role "member",
- * ADMIN_PASSWORD -> role "admin". Same login form, same cookie mechanism.
+ * This replaces the old shared APP_PASSWORD/ADMIN_PASSWORDS model entirely:
+ * every person authenticates as themselves (PIN, verified against their own
+ * bcrypt hash in Axisero People — see lib/pin.ts and lib/notion.ts), and
+ * `role` is read from their `Is Admin` flag at login time rather than from
+ * which of two shared passwords was typed.
  */
 
 export type Role = "member" | "admin";
 
 export interface SessionPayload {
+  person: string;
   role: Role;
   iat: number;
 }
@@ -35,9 +40,11 @@ function sign(payloadB64: string): string {
   return createHmac("sha256", secret()).update(payloadB64).digest("base64url");
 }
 
-function buildToken(role: Role): string {
+function buildToken(person: string, role: Role): string {
   const payloadB64 = Buffer.from(
-    JSON.stringify({ v: 2, role, iat: Date.now() } satisfies SessionPayload & { v: number })
+    JSON.stringify({ v: 3, person, role, iat: Date.now() } satisfies SessionPayload & {
+      v: number;
+    })
   ).toString("base64url");
   return `${payloadB64}.${sign(payloadB64)}`;
 }
@@ -49,7 +56,9 @@ function isRole(value: unknown): value is Role {
 /**
  * Pure verification + parsing, safe to call from `proxy.ts` (no `next/headers`
  * there) — it only needs the raw cookie value pulled off the request.
- * Returns null for a missing, tampered, or pre-role (v1) cookie.
+ * Returns null for a missing, tampered, or pre-§20 (v1/v2, no `person`) cookie
+ * — those simply force a re-login, which is correct: there's no person
+ * identity to recover from an old shared-password session anyway.
  */
 export function parseSessionToken(token: string | undefined | null): SessionPayload | null {
   if (!token) return null;
@@ -71,8 +80,15 @@ export function parseSessionToken(token: string | undefined | null): SessionPayl
 
   try {
     const parsed = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-    if (!isRole(parsed?.role) || typeof parsed?.iat !== "number") return null;
-    return { role: parsed.role, iat: parsed.iat };
+    if (
+      !isRole(parsed?.role) ||
+      typeof parsed?.iat !== "number" ||
+      typeof parsed?.person !== "string" ||
+      parsed.person.length === 0
+    ) {
+      return null;
+    }
+    return { person: parsed.person, role: parsed.role, iat: parsed.iat };
   } catch {
     return null;
   }
@@ -82,9 +98,9 @@ export function isValidSessionToken(token: string | undefined | null): boolean {
   return parseSessionToken(token) !== null;
 }
 
-export async function createSession(role: Role): Promise<void> {
+export async function createSession(person: string, role: Role): Promise<void> {
   const store = await cookies();
-  store.set(SESSION_COOKIE_NAME, buildToken(role), {
+  store.set(SESSION_COOKIE_NAME, buildToken(person, role), {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
@@ -137,38 +153,5 @@ export function requireCronSecretResponse(request: Request): NextResponse | null
   if (request.headers.get("authorization") !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
   }
-  return null;
-}
-
-/** Constant-time compare against a known-good value; false (never throws) if it's empty. */
-function matches(candidate: string, expected: string): boolean {
-  if (!expected) return false;
-  const a = createHmac("sha256", secret()).update(candidate).digest();
-  const b = createHmac("sha256", secret()).update(expected).digest();
-  return timingSafeEqual(a, b);
-}
-
-/**
- * §16f: a second (or third, ...) admin. ADMIN_PASSWORDS is a comma-separated
- * list — any match grants admin. Falls back to the singular ADMIN_PASSWORD if
- * ADMIN_PASSWORDS isn't set, so existing single-admin setups don't break.
- */
-function adminPasswords(): string[] {
-  const list = process.env.ADMIN_PASSWORDS;
-  if (list) {
-    return list
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean);
-  }
-  return process.env.ADMIN_PASSWORD ? [process.env.ADMIN_PASSWORD] : [];
-}
-
-/** Resolves a submitted password to a role, admin checked first. Null if it matches neither. */
-export function resolveRole(candidate: string): Role | null {
-  for (const admin of adminPasswords()) {
-    if (matches(candidate, admin)) return "admin";
-  }
-  if (matches(candidate, process.env.APP_PASSWORD ?? "")) return "member";
   return null;
 }

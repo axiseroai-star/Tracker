@@ -34,5 +34,12 @@ export default async function AdminPage() {
     loadError = "Failed to load the team roster for the entry form below.";
   }
 
-  return <AdminClient people={people} personChannels={personChannels} loadError={loadError} />;
+  return (
+    <AdminClient
+      sessionPerson={session.person}
+      people={people}
+      personChannels={personChannels}
+      loadError={loadError}
+    />
+  );
 }

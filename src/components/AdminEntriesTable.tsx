@@ -14,7 +14,7 @@ const PAGE_LABEL: Record<SortKey, string> = {
   outputCount: "Output",
 };
 
-export default function AdminEntriesTable() {
+export default function AdminEntriesTable({ sessionPerson }: { sessionPerson: string }) {
   const [entries, setEntries] = useState<DailyLogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -264,6 +264,7 @@ export default function AdminEntriesTable() {
         <CommentPanel
           logEntryId={commentTarget.id}
           title={`${commentTarget.person} — ${commentTarget.channel} — ${commentTarget.date}`}
+          sessionPerson={sessionPerson}
           onClose={() => setCommentTarget(null)}
         />
       )}

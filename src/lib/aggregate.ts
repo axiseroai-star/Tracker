@@ -155,6 +155,8 @@ export interface PersonRecord {
   timezone: string;
   active: boolean;
   slackHandle: string | null;
+  isAdmin: boolean; // §20a — replaces the old ADMIN_PASSWORDS mechanism
+  hasPin: boolean; // §20a — whether PIN Hash is set; never the hash itself (see lib/notion.ts)
 }
 
 // ---------------------------------------------------------------------------

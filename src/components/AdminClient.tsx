@@ -8,10 +8,13 @@ import AdminTargetsPanel from "@/components/AdminTargetsPanel";
 import AdminTeamPanel from "@/components/AdminTeamPanel";
 
 export default function AdminClient({
+  sessionPerson,
   people,
   personChannels,
   loadError,
 }: {
+  /** The logged-in admin's own name (§20) — used as Author on comments left from here. */
+  sessionPerson: string;
   people: EntryFormPerson[];
   personChannels: Record<string, string[]>;
   loadError?: string | null;
@@ -30,7 +33,8 @@ export default function AdminClient({
         <div>
           <h1 className="text-2xl font-bold text-ink">Admin</h1>
           <p className="text-sm text-ink-muted">
-            Team, responsibilities, full history, comments, and targets.
+            Signed in as {sessionPerson} · Team, responsibilities, full history, comments,
+            and targets.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -62,14 +66,14 @@ export default function AdminClient({
           </p>
         ) : (
           <div className="max-w-lg">
-            <EntryForm role="admin" people={people} personChannels={personChannels} />
+            <EntryForm mode="any" people={people} personChannels={personChannels} />
           </div>
         )}
       </section>
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-semibold text-ink">All entries</h2>
-        <AdminEntriesTable />
+        <AdminEntriesTable sessionPerson={sessionPerson} />
       </section>
 
       <section>

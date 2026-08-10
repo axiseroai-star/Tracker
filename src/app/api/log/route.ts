@@ -7,6 +7,11 @@ import { getSession } from "@/lib/auth";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function POST(request: NextRequest) {
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -21,6 +26,18 @@ export async function POST(request: NextRequest) {
 
   if (typeof person !== "string" || person.length === 0) {
     return NextResponse.json({ ok: false, error: "A valid person is required." }, { status: 400 });
+  }
+
+  // §20c: acting as yourself is always allowed; acting as someone else is
+  // the one deliberate exception, and only for admin (their /admin "log for
+  // anyone" form) — derived from whether the submitted person matches the
+  // verified session identity, never from a client-supplied flag.
+  const actingAsSelf = person === session.person;
+  if (!actingAsSelf && session.role !== "admin") {
+    return NextResponse.json(
+      { ok: false, error: "You can only log entries as yourself." },
+      { status: 403 }
+    );
   }
 
   // Live roster/responsibilities (§18) — cached, so this is cheap even
@@ -52,13 +69,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "A valid date is required." }, { status: 400 });
   }
 
-  // §14b: members can't backdate/postdate at all — the client locks the field,
-  // but that's a UX nicety, not enforcement. Recompute independently here and
-  // reject anything that doesn't match. Admin's "log for anyone" form skips
-  // this check entirely — that's the only path backfills go through.
-  const session = await getSession();
-  const isAdmin = session?.role === "admin";
-  if (!isAdmin) {
+  // §14b: acting as yourself can't backdate/postdate at all — the client
+  // locks the field, but that's a UX nicety, not enforcement. Recompute
+  // independently here and reject anything that doesn't match. Acting as
+  // someone else (admin only, checked above) skips this — that's the only
+  // path backfills go through.
+  if (actingAsSelf) {
     const expectedDate = effectiveDate(personRecord.timezone);
     if (date !== expectedDate) {
       return NextResponse.json(

@@ -21,14 +21,16 @@ import {
 
 // A small fixed roster for tests — the live app fetches this from Notion
 // (§18), but aggregate.ts itself just takes whatever roster it's given.
+const PR = { slackHandle: null, isAdmin: false, hasPin: true }; // shared PersonRecord filler for tests
+
 const TEST_PEOPLE: PersonRecord[] = [
-  { id: "p1", name: "Ahsan Aftab", timezone: "Europe/Berlin", active: true, slackHandle: null },
-  { id: "p2", name: "Abbas Raza", timezone: "Asia/Karachi", active: true, slackHandle: null },
-  { id: "p3", name: "Hafsa Khan", timezone: "Asia/Karachi", active: true, slackHandle: null },
-  { id: "p4", name: "Mohsin Aftab", timezone: "Asia/Karachi", active: true, slackHandle: null },
-  { id: "p5", name: "Najeeb", timezone: "Asia/Karachi", active: true, slackHandle: null },
-  { id: "p6", name: "Halima Sadia", timezone: "Asia/Karachi", active: true, slackHandle: null },
-  { id: "p7", name: "Muqadas Rajput", timezone: "Asia/Karachi", active: true, slackHandle: null },
+  { id: "p1", name: "Ahsan Aftab", timezone: "Europe/Berlin", active: true, ...PR },
+  { id: "p2", name: "Abbas Raza", timezone: "Asia/Karachi", active: true, ...PR },
+  { id: "p3", name: "Hafsa Khan", timezone: "Asia/Karachi", active: true, ...PR },
+  { id: "p4", name: "Mohsin Aftab", timezone: "Asia/Karachi", active: true, ...PR },
+  { id: "p5", name: "Najeeb", timezone: "Asia/Karachi", active: true, ...PR },
+  { id: "p6", name: "Halima Sadia", timezone: "Asia/Karachi", active: true, ...PR },
+  { id: "p7", name: "Muqadas Rajput", timezone: "Asia/Karachi", active: true, ...PR },
 ];
 
 // --- workingDays -------------------------------------------------------
@@ -193,7 +195,7 @@ test("allKnownChannels: union of target (incl. archived) and log channels, sorte
 
 test("buildTrends: per-person daily series, 0-filled, oldest first", () => {
   const people: PersonRecord[] = [
-    { id: "p1", name: "Ahsan Aftab", timezone: "Europe/Berlin", active: true, slackHandle: null },
+    { id: "p1", name: "Ahsan Aftab", timezone: "Europe/Berlin", active: true, ...PR },
   ];
   const logs = [
     { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-01", outputCount: 10 },
@@ -212,7 +214,7 @@ test("buildTrends: per-person daily series, 0-filled, oldest first", () => {
 
 test("buildTrends: archived entries are excluded", () => {
   const people: PersonRecord[] = [
-    { id: "p1", name: "A", timezone: "UTC", active: true, slackHandle: null },
+    { id: "p1", name: "A", timezone: "UTC", active: true, ...PR },
   ];
   const logs = [
     { id: "l1", person: "A", channel: "X", date: "2026-08-01", outputCount: 10, archived: true },
