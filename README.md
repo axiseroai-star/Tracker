@@ -49,8 +49,34 @@ Open [http://localhost:3000](http://localhost:3000). You'll land on `/login`.
 1. Push this repo, import it into Vercel.
 2. Under **Project Settings → Environment Variables**, add the same variables from
    `.env.local` (do **not** upload the file itself — Vercel encrypts these at rest).
+   `CRON_SECRET` must be set for `/api/cron/*` to work at all — see below.
 3. Confirm the Notion integration is still connected to all four databases (step 1.3) —
    this is the most common "works locally, not in prod" gap.
+
+### 5. Optional: scheduled jobs (§16e, §16g)
+
+`vercel.json` defines three Vercel Cron jobs — a weekly CSV backup email, an hourly
+Slack nudge check, and a weekly Slack digest. All three are already wired up and will
+deploy automatically; each one just no-ops (200, not an error) until its own env vars are
+filled in, **except** `CRON_SECRET`, which every one of them requires unconditionally
+(they fail closed — 500 — without it, since it's their only auth, in place of the session
+cookie every other route uses).
+
+- **Backup** (`/api/cron/backup`, Monday 06:00 UTC): sign up at [resend.com](https://resend.com)
+  (free tier), set `RESEND_API_KEY` and `BACKUP_EMAIL_TO`.
+- **Nudge** (`/api/cron/nudge`, hourly) and **digest** (`/api/cron/digest`, Monday 07:00
+  UTC): create a Slack App → enable **Incoming Webhooks** → generate a webhook URL for
+  the target channel → set `SLACK_WEBHOOK_URL`.
+
+> **Vercel plan note:** the nudge job is scheduled hourly because that's what makes one
+> schedule work correctly across everyone's different timezones (§16g) — but **Vercel's
+> Hobby (free) plan only runs cron jobs once a day**, regardless of the schedule you set;
+> hourly cadence needs a Pro plan. On Hobby, the nudge job will still run and no-op
+> gracefully the rest of the time, but nudges will only actually fire roughly once a day
+> rather than at everyone's precise `NUDGE_HOUR`. If that's not good enough, either
+> upgrade to Pro or point an external scheduler (e.g. a free cron-ping service) at
+> `/api/cron/nudge` with the `Authorization: Bearer $CRON_SECRET` header instead of
+> relying on `vercel.json`.
 
 ## Project structure
 
@@ -61,36 +87,51 @@ src/
     page.tsx                 Dashboard (default landing page) — Server Component, resolves role
     log/page.tsx              Daily entry form
     targets/page.tsx          Read-only targets view (members)
+    trends/page.tsx            Per-person output over 30/90 days (§16a)
+    meeting/page.tsx            Chrome-free, large-text dashboard subset for screen-share (§16i)
     admin/page.tsx             Admin console — Server Component, redirects non-admins (§13a)
     api/
-      auth/login|logout/       Session cookie issue/clear (role-aware)
-      dashboard/                Aggregated dashboard JSON (excludes archived, includes comment counts)
-      targets/                  Targets grouped by person
-      log/                      Create a Daily Log entry (any person — see §13e note below)
+      auth/login|logout/       Session cookie issue/clear (role- and ADMIN_PASSWORDS-aware, §16f)
+      dashboard/                Aggregated dashboard JSON (via lib/dashboard-data.ts)
+      targets/                  Targets grouped by the live Active roster
+      trends/                    Per-person daily output over N days (§16a)
+      log/                      Create a Daily Log entry (any active person — see §13e note below)
       admin/entries/             GET full history (incl. archived) — admin only
       admin/entries/[id]/         PATCH archived/flagged — admin only
-      admin/comments/             GET/POST top-level comments for a row — admin only
+      admin/comments/             GET all (incl. hidden) comments for a row — admin only
       admin/targets/               POST a new responsibility — admin only
       admin/targets/[id]/         PATCH Daily Target and/or Archived — admin only
+      admin/target-suggestions/    GET 14-day recent averages per person/channel (§16c)
       admin/people/                GET all people / POST add a team member — admin only
       admin/people/[id]/           PATCH Active/Timezone — admin only
       comments/                    GET visible thread / POST a reply — any session (§16d)
       comments/[id]/               PATCH/DELETE — admin, or the reply's own Author
+      cron/backup/                 Weekly CSV email via Resend — CRON_SECRET-protected (§16e)
+      cron/nudge/                   Hourly per-person Slack nudge check (§16g)
+      cron/digest/                  Weekly Slack KPI digest (§16g)
   lib/
     notion.ts                 Notion client + query/create/update helpers (server-only)
-    aggregate.ts               Pure rolling-window / attainment / status / streak / roster logic
+    aggregate.ts               Pure rolling-window / attainment / status / streak / trend / roster logic
     aggregate.test.ts          Unit tests for the above (`npm test`)
+    dashboard-data.ts           Shared fetch+aggregate used by /api/dashboard and the digest cron
     format.ts                  Display-only date formatting + CSV export
+    slack.ts                    Incoming-webhook post + @mention formatting (server-only)
     constants.ts                DAY_CUTOFF_HOUR, NUDGE_HOUR, STATUS, avatarColorForName
                                  (no more PEOPLE/CHANNELS/PERSON_CHANNELS — see §18 below)
-    auth.ts                     Signed session cookie helpers, roles, admin guard (server-only)
+    auth.ts                     Signed session cookie helpers, roles, admin + cron guards (server-only)
     rate-limit.ts                In-memory limiter for /api/auth/login
   components/                  KpiCard, PersonCard, WeeklyBarChart, ChannelMatrix, …
                                  AdminEntriesTable, AdminTargetsPanel, AdminTeamPanel,
-                                 CommentPanel, PersonCommentsModal, AdminClient
-  proxy.ts                     Redirects to /login when the session cookie is missing, and
-                                 bounces non-admins away from /admin* (optimistic — see §13a)
+                                 CommentPanel, PersonCommentsModal, AdminClient,
+                                 ServiceWorkerRegister
+  proxy.ts                     Redirects to /login when the session cookie is missing (except
+                                 /api/cron/*, which use their own CRON_SECRET check instead),
+                                 and bounces non-admins away from /admin* (optimistic — §13a)
                                  (renamed from `middleware.ts` in Next.js 16)
+public/
+  manifest.json               PWA manifest (§16h)
+  sw.js                        Minimal pass-through service worker — no offline caching for v1
+  icons/                       192/512/maskable-512/apple-touch PNGs
 ```
 
 ## How the numbers are computed
@@ -167,16 +208,19 @@ Logging in with `ADMIN_PASSWORD` instead of `APP_PASSWORD` grants `role: "admin"
 session cookie (same login form, same cookie mechanism — just a second password checked
 in `/api/auth/login`). Admins get an **Admin** link in the nav leading to `/admin`, which:
 
+- **Team** and **Responsibilities** sections — see "Dynamic team & responsibilities" above.
 - Shows every Daily Log row ever created (not just the rolling 7-day window), with
   person/channel/date filters, sortable columns, and a "show archived" toggle.
 - Reuses the exact `/log` entry form — the Person field was already unrestricted for
   everyone (see the note below), so nothing changes there for admin specifically.
 - Archives/restores rows (flips the `Archived` checkbox) and flags rows (`Flagged`
   checkbox) — never a hard delete.
-- Opens a comment thread per row, backed by the `Axisero Comments` data source. New
-  comments default to `Visible To Person = true`.
-- Edits `Daily Target` inline (PATCHes the Targets data source directly) — `/targets`
-  stays read-only for members by design.
+- Opens a comment thread per row, backed by the `Axisero Comments` data source, with
+  edit/delete on any comment (§16d). New top-level comments default to
+  `Visible To Person = true`.
+- Edits `Daily Target` inline (PATCHes the Targets data source directly), with a
+  "Recent avg" 14-day figure and a one-click "Use suggestion" fill next to each field
+  that never auto-saves on its own (§16c) — `/targets` stays read-only for members.
 - Exports the currently-filtered table to CSV, client-side, no extra request.
 
 **Access control is enforced three times, independently:** `proxy.ts` redirects a
@@ -196,10 +240,45 @@ true after. The admin role adds extra powers on top of the shared entry form; it
 doesn't add new restrictions on top of what members could already do. Real per-person
 restrictions would require actual per-person accounts, which is out of scope (see below).
 
+## Trends and streaks (§16a, §16b)
+
+`/trends` shows each active person's daily output over the last 30 or 90 days — a
+separate, paginated Daily Log query (`queryDailyLogByDateRange` already pages via
+`start_cursor` internally), independent of the dashboard's rolling 7-day window and not
+sharing its query budget. On the dashboard itself, each person card shows a
+🔥 *N*-day streak — consecutive calendar days (by that person's own `effectiveDate`)
+with at least one non-archived entry, counting back from today until the first gap —
+computed from the same buffered Daily Log fetch the rest of the dashboard already uses
+(no extra Notion call), so it's only as accurate as that fetch's lookback window
+(~35 days) before it silently caps out.
+
+## Two-way comments (§16d)
+
+Comments gained an `Author` field (a person's name, or `"Admin"`). Anyone — member or
+admin — can reply to a comment thread on any person's card; since there's no per-member
+login, the UI prompts "Replying as: [Person]" the same way `/log` does, and tags the new
+row with that name plus `Visible To Person = true`. Edit/delete works for admin (any
+comment) or for whoever is currently selected as "Replying as" on their own replies —
+enforced server-side in `/api/comments/[id]` by comparing the submitted `actingAs`
+against the comment's real `Author`, not just by hiding the buttons client-side. This
+is the same shared-password trust model as §13e: the app can't cryptographically verify
+who's typing, and that's an accepted tradeoff of this design, not a new gap.
+
+## Installable app & meeting view (§16h, §16i)
+
+The app can be installed to a phone or desktop home screen (`public/manifest.json` +
+a minimal pass-through service worker registered from the root layout — no offline
+data sync for v1, installability was the only goal). `/meeting` is a separate,
+chrome-free route — large text, high contrast, no nav/buttons/filters/admin controls,
+just the KPI strip, the weekly bar chart, and a plain per-person status list — meant to
+stay legible when a laptop screen showing it is shared and shrunk into a Google Meet
+window. It auto-refreshes every 90 seconds with no visible controls.
+
 ## Testing
 
 ```bash
-npm test    # unit tests for lib/aggregate.ts (workingDays, attainment, status, buildDashboard)
+npm test    # unit tests for lib/aggregate.ts — workingDays, attainment, status, streaks,
+            # trends/channel-averages, and buildDashboard, all against an injected roster
 npm run lint
 npm run build
 ```
@@ -207,7 +286,11 @@ npm run build
 ## Out of scope for v1
 
 Per-user Notion accounts (so `/log` still can't restrict "you can only log as
-yourself" — see the trust note above), historical charts beyond the rolling 7-day
-window, and notifications/reminders. Editing/deleting/archiving Daily Log entries and
-editing Targets are now possible, but **admin-only** via `/admin` (§13) — members still
-get read-only `/targets` and no delete/archive controls at all.
+yourself" — see the trust note above). A ranked leaderboard was deliberately left out —
+easy to build, but risks souring team dynamics for whoever's currently at risk; revisit
+only if explicitly asked again. WhatsApp nudges were scoped down to Slack-only for this
+round — the WhatsApp Business API needs phone verification and template approval, a
+meaningfully bigger project than a Slack webhook. Everything else that used to be listed
+here (editing/archiving Daily Log entries, editing Targets, historical trend views,
+notifications) now exists in some admin-gated or role-appropriate form — see the
+sections above.
