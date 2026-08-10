@@ -11,10 +11,23 @@ export default async function LogPage() {
   const session = await getSession();
   const role = session?.role ?? "member";
 
-  const [allPeople, targets] = await Promise.all([queryAllPeople(), queryAllTargets()]);
-  const activePeople = allPeople.filter((p) => p.active);
-  const people = activePeople.map((p) => ({ name: p.name, timezone: p.timezone }));
-  const personChannels = buildPersonChannelsMap(activePeople, targets);
+  let people: { name: string; timezone: string }[] = [];
+  let personChannels: Record<string, string[]> = {};
+  let loadError: string | null = null;
+  try {
+    const [allPeople, targets] = await Promise.all([queryAllPeople(), queryAllTargets()]);
+    const activePeople = allPeople.filter((p) => p.active);
+    people = activePeople.map((p) => ({ name: p.name, timezone: p.timezone }));
+    personChannels = buildPersonChannelsMap(activePeople, targets);
+  } catch (error) {
+    // Never let a Notion hiccup take down the whole page with Next's default
+    // error boundary — degrade to a plain message, same as every API route.
+    console.error(
+      "Failed to load /log data:",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    loadError = "Failed to load the team roster. Try refreshing in a moment.";
+  }
 
   return (
     <main className="mx-auto w-full max-w-lg px-4 py-8 sm:py-12">
@@ -27,7 +40,13 @@ export default async function LogPage() {
           Dashboard →
         </Link>
       </div>
-      <EntryForm role={role} people={people} personChannels={personChannels} />
+      {loadError ? (
+        <p className="rounded-card border border-risk/30 bg-risk-soft px-4 py-3 text-sm text-risk">
+          {loadError}
+        </p>
+      ) : (
+        <EntryForm role={role} people={people} personChannels={personChannels} />
+      )}
     </main>
   );
 }

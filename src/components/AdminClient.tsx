@@ -10,9 +10,11 @@ import AdminTeamPanel from "@/components/AdminTeamPanel";
 export default function AdminClient({
   people,
   personChannels,
+  loadError,
 }: {
   people: EntryFormPerson[];
   personChannels: Record<string, string[]>;
+  loadError?: string | null;
 }) {
   const router = useRouter();
 
@@ -54,9 +56,15 @@ export default function AdminClient({
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-semibold text-ink">Log for anyone</h2>
-        <div className="max-w-lg">
-          <EntryForm role="admin" people={people} personChannels={personChannels} />
-        </div>
+        {loadError ? (
+          <p className="max-w-lg rounded-card border border-risk/30 bg-risk-soft px-4 py-3 text-sm text-risk">
+            {loadError}
+          </p>
+        ) : (
+          <div className="max-w-lg">
+            <EntryForm role="admin" people={people} personChannels={personChannels} />
+          </div>
+        )}
       </section>
 
       <section className="mb-6">
