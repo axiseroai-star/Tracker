@@ -1,26 +1,17 @@
 /**
  * Pure aggregation logic: rolling-window math, attainment/status rules,
- * per-person day boundaries, and the full dashboard shape-building used by
- * /api/dashboard.
+ * per-person day boundaries, streaks, and the full dashboard shape-building
+ * used by /api/dashboard.
  *
  * Side-effect-free (no Notion calls) so it's easy to unit test — see
- * aggregate.test.ts. `now` is always an injectable parameter rather than
- * read from `Date.now()` internally, for the same reason.
+ * aggregate.test.ts. `now` and the roster (`people`) are always injected
+ * parameters rather than read from `Date.now()`/a hardcoded constant
+ * internally, for the same reason — the roster is live Notion data as of
+ * §18, fetched by the caller (an API route), not imported here.
  */
 
 import { formatInTimeZone } from "date-fns-tz";
-import {
-  AVATAR_COLORS,
-  CHANNELS,
-  DAY_CUTOFF_HOUR,
-  PEOPLE,
-  PERSON_CHANNELS,
-  PERSON_TIMEZONES,
-  STATUS,
-  type Channel,
-  type Person,
-  type StatusKey,
-} from "./constants";
+import { avatarColorForName, DAY_CUTOFF_HOUR, STATUS, type StatusKey } from "./constants";
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -58,11 +49,14 @@ export function dateRangeISO(startISO: string, endISO: string): string[] {
 }
 
 /**
- * "What day is it" for a given person (§14a) — converts `now` into their
- * IANA timezone, and if the local hour is before DAY_CUTOFF_HOUR, treats it
- * as still being the previous calendar day. This is the single source of
- * truth every other per-person rule (missed-today, rolling windows, the
- * /log date lock) is built on top of.
+ * "What day is it" in a given IANA timezone (§14a) — if the local hour is
+ * before DAY_CUTOFF_HOUR, treats it as still being the previous calendar
+ * day. This is the single source of truth every other per-person rule
+ * (missed-today, rolling windows, the /log date lock) is built on top of.
+ *
+ * Takes a timezone string directly rather than a person name (§18e: the
+ * timezone now comes from the live `Axisero People` fetch, looked up by the
+ * caller — this function stays roster-agnostic and pure/testable).
  *
  * Uses date-fns-tz's `formatInTimeZone` rather than constructing a zoned
  * `Date` and reading its getters — that pattern is deceptively easy to get
@@ -73,8 +67,7 @@ export function dateRangeISO(startISO: string, endISO: string): string[] {
  * sidesteps all of that by formatting directly, independent of the host's
  * own timezone setting.
  */
-export function effectiveDate(person: Person, now: Date = new Date()): string {
-  const timeZone = PERSON_TIMEZONES[person];
+export function effectiveDate(timeZone: string, now: Date = new Date()): string {
   const [localDate, hourStr] = formatInTimeZone(now, timeZone, "yyyy-MM-dd HH").split(" ");
   const hour = Number(hourStr);
   return hour < DAY_CUTOFF_HOUR ? addDaysISO(localDate, -1) : localDate;
@@ -126,14 +119,47 @@ export function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/**
+ * §16b: consecutive calendar days (ending at `effectiveToday`, going
+ * backward) with at least one non-archived entry, stopping at the first gap.
+ * If `effectiveToday` itself has no entry yet, the streak is 0 — this is the
+ * literal "counting backward from today until the first gap" rule; it isn't
+ * padded to "yesterday's streak" just because today hasn't been logged yet.
+ *
+ * Only as accurate as how far back `personLogs` reaches — the caller controls
+ * that via how wide a date range it queried (see /api/dashboard's buffer).
+ */
+export function computeStreak(personLogs: DailyLogEntry[], effectiveToday: string): number {
+  const loggedDates = new Set(personLogs.filter((l) => !l.archived).map((l) => l.date));
+  let streak = 0;
+  let cursor = effectiveToday;
+  while (loggedDates.has(cursor)) {
+    streak++;
+    cursor = addDaysISO(cursor, -1);
+  }
+  return streak;
+}
+
+// ---------------------------------------------------------------------------
+// Roster (§18) — fetched live from Notion by the caller, passed in here.
+// ---------------------------------------------------------------------------
+
+export interface PersonRecord {
+  id: string; // Notion page id (Axisero People) — needed for admin Team edits
+  name: string;
+  timezone: string;
+  active: boolean;
+  slackHandle: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard aggregation
 // ---------------------------------------------------------------------------
 
 export interface DailyLogEntry {
   id: string; // Notion page id — needed to correlate comments (§13b) and for admin actions
-  person: Person;
-  channel: Channel;
+  person: string;
+  channel: string;
   date: string; // YYYY-MM-DD
   outputCount: number;
   notes?: string;
@@ -142,32 +168,63 @@ export interface DailyLogEntry {
 }
 
 export interface TargetRow {
-  id: string; // Notion page id — needed for admin inline editing (§13c)
-  person: Person;
-  channel: Channel;
+  id: string; // Notion page id — needed for admin inline editing (§13c) and archiving (§18c)
+  person: string;
+  channel: string;
   dailyTarget: number;
   unit: string;
+  archived: boolean;
 }
 
-/** Minimal shape needed to correlate a visible comment back to a person (§13d badge/popover). */
+/** A person's currently-loggable channels (§18b) — distinct, non-archived Targets rows. */
+export function channelsForPerson(personName: string, targets: TargetRow[]): string[] {
+  const set = new Set<string>();
+  for (const t of targets) {
+    if (t.person === personName && !t.archived) set.add(t.channel);
+  }
+  return [...set];
+}
+
+/** Shared by /log and /admin's "log for anyone" — a name -> loggable-channels map for the whole roster. */
+export function buildPersonChannelsMap(
+  people: PersonRecord[],
+  targets: TargetRow[]
+): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  for (const p of people) map[p.name] = channelsForPerson(p.name, targets);
+  return map;
+}
+
+/** Every channel referenced anywhere (targets, archived or not, plus any log entry) — for the matrix/filters. */
+export function allKnownChannels(targets: TargetRow[], logs: DailyLogEntry[]): string[] {
+  const set = new Set<string>();
+  for (const t of targets) set.add(t.channel);
+  for (const l of logs) set.add(l.channel);
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+/** Minimal shape needed to correlate a visible comment back to a person (§13d badge/popover, §16d thread). */
 export interface CommentRef {
   id: string;
   logEntryId: string | null;
   comment: string;
+  author: string | null;
   commentedAt: string | null;
 }
 
-/** A visible comment, resolved to the entry it's on — what the member-facing popover reads. */
+/** A visible comment, resolved to the entry it's on — what the member-facing thread reads (§13d, §16d). */
 export interface PersonComment {
   id: string;
   comment: string;
-  channel: Channel;
+  author: string | null;
+  channel: string;
   date: string; // YYYY-MM-DD, the log entry's date
+  logEntryId: string; // needed so a reply/edit/delete knows which row to act on
   commentedAt: string | null;
 }
 
 export interface DashboardPerson {
-  person: Person;
+  person: string;
   avatarColor: string;
   initials: string;
   /** This person's own effectiveDate(now) — their window and missed-today check are anchored to it (§14c). */
@@ -180,17 +237,18 @@ export interface DashboardPerson {
   attainmentPct: number | null;
   statusKey: StatusKey;
   channelsActive: number;
+  streak: number; // §16b
   sparkline: number[]; // 7 values, oldest -> newest, aligned to this person's own window
-  channelTags: Channel[]; // this person's assigned channels
+  channelTags: string[]; // this person's assigned (non-archived) channels
   commentCount: number; // = comments.length, kept as a field since it's read so often
   comments: PersonComment[]; // visible comments on this person's entries, newest first
 }
 
 export interface ChannelMatrixCell {
-  person: Person;
-  channel: Channel;
+  person: string;
+  channel: string;
   total: number;
-  assigned: boolean; // whether this channel is in the person's normal lineup
+  assigned: boolean; // whether this channel is in the person's current (non-archived) lineup
 }
 
 export interface DashboardKpi {
@@ -199,7 +257,7 @@ export interface DashboardKpi {
   /** Percent delta vs the prior 7-day window, or null if there's no prior baseline. */
   teamOutputDeltaPct: number | null;
   teamAvgAttainmentPct: number | null;
-  topPerformer: { person: Person; attainmentPct: number } | null;
+  topPerformer: { person: string; attainmentPct: number } | null;
   needsAttentionCount: number;
 }
 
@@ -209,37 +267,39 @@ export interface DashboardResult {
   // so there's no one date range that honestly describes "the" window
   // anymore. See DashboardPerson.windowStartISO/windowEndISO for per-person.
   people: DashboardPerson[]; // default-sorted by attainment desc, no-target last
-  missedToday: Person[];
+  missedToday: string[];
   kpi: DashboardKpi;
   channelMatrix: ChannelMatrixCell[];
   isEmpty: boolean;
 }
 
 export function buildDashboard(params: {
+  /** The live, Active-only roster (§18e) — never a hardcoded list. */
+  people: PersonRecord[];
   /**
-   * Should span every person's possible window with buffer room — the
-   * caller queries Notion once with a wide enough date range (§14c: roughly
-   * today-8 to today+1 UTC) and this function filters/aggregates per person
-   * from that single in-memory set. Never fetch per person.
+   * Should span every person's possible window (plus streak lookback) with
+   * buffer room — the caller queries Notion once with a wide enough date
+   * range (see /api/dashboard) and this function filters/aggregates per
+   * person from that single in-memory set. Never fetch per person.
    */
   logs: DailyLogEntry[];
   targets: TargetRow[];
   /** The reference instant every person's effectiveDate is derived from. Defaults to now. */
   now?: Date;
   /**
-   * Visible comments to correlate into per-person popovers (§13d). Only
+   * Visible comments to correlate into per-person threads (§13d/§16d). Only
    * comments whose `logEntryId` matches an id in `logs` are surfaced — a
    * comment on an entry outside whatever range the caller fetched simply
    * won't show up here.
    */
   comments?: CommentRef[];
 }): DashboardResult {
-  const { logs, targets, now = new Date(), comments = [] } = params;
+  const { people: roster, logs, targets, now = new Date(), comments = [] } = params;
 
   const idToLog = new Map<string, DailyLogEntry>();
   for (const log of logs) idToLog.set(log.id, log);
 
-  const commentsByPerson = new Map<Person, PersonComment[]>();
+  const commentsByPerson = new Map<string, PersonComment[]>();
   for (const c of comments) {
     if (!c.logEntryId) continue;
     const log = idToLog.get(c.logEntryId);
@@ -248,8 +308,10 @@ export function buildDashboard(params: {
     list.push({
       id: c.id,
       comment: c.comment,
+      author: c.author,
       channel: log.channel,
       date: log.date,
+      logEntryId: log.id,
       commentedAt: c.commentedAt,
     });
     commentsByPerson.set(log.person, list);
@@ -262,21 +324,24 @@ export function buildDashboard(params: {
   const inRange = (iso: string, from: string, to: string) =>
     toUTCDate(iso) >= toUTCDate(from) && toUTCDate(iso) <= toUTCDate(to);
 
-  // person -> channel -> dailyTarget
-  const targetMap = new Map<Person, Map<Channel, number>>();
+  // person -> channel -> dailyTarget (non-archived responsibilities only)
+  const targetMap = new Map<string, Map<string, number>>();
   for (const t of targets) {
+    if (t.archived) continue;
     if (!targetMap.has(t.person)) targetMap.set(t.person, new Map());
     targetMap.get(t.person)!.set(t.channel, t.dailyTarget);
   }
 
-  const missedToday: Person[] = [];
+  const missedToday: string[] = [];
   let teamOutputThisWeek = 0;
   let teamOutputLastWeek = 0;
   let anyEntriesThisWeek = false;
   const channelMatrix: ChannelMatrixCell[] = [];
+  const matrixChannels = allKnownChannels(targets, logs);
 
-  const people: DashboardPerson[] = PEOPLE.map((person) => {
-    const effectiveToday = effectiveDate(person, now);
+  const people: DashboardPerson[] = roster.map((personRecord) => {
+    const person = personRecord.name;
+    const effectiveToday = effectiveDate(personRecord.timezone, now);
     const { startISO, endISO, prevStartISO, prevEndISO } = rollingWindow(effectiveToday);
     const workingDaysInWindow = workingDays(startISO, endISO);
     const windowDates = dateRangeISO(startISO, endISO);
@@ -287,7 +352,7 @@ export function buildDashboard(params: {
       inRange(l.date, prevStartISO, prevEndISO)
     );
 
-    const assignedChannels = PERSON_CHANNELS[person];
+    const assignedChannels = channelsForPerson(person, targets);
     const personTargets = targetMap.get(person);
     const weeklyTargetTotal = assignedChannels.reduce((sum, channel) => {
       const daily = personTargets?.get(channel) ?? 0;
@@ -315,7 +380,7 @@ export function buildDashboard(params: {
       missedToday.push(person);
     }
 
-    for (const channel of CHANNELS) {
+    for (const channel of matrixChannels) {
       const total = personWeekLogs
         .filter((l) => l.channel === channel)
         .reduce((s, l) => s + l.outputCount, 0);
@@ -326,7 +391,7 @@ export function buildDashboard(params: {
 
     return {
       person,
-      avatarColor: AVATAR_COLORS[person],
+      avatarColor: avatarColorForName(person),
       initials: getInitials(person),
       effectiveToday,
       windowStartISO: startISO,
@@ -337,6 +402,7 @@ export function buildDashboard(params: {
       attainmentPct,
       statusKey: status(att),
       channelsActive,
+      streak: computeStreak(personLogs, effectiveToday),
       sparkline,
       channelTags: assignedChannels,
       commentCount: personComments.length,

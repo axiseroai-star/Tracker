@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { DailyLogEntry } from "@/lib/aggregate";
-import { CHANNELS, PEOPLE, type Channel, type Person } from "@/lib/constants";
 import { downloadCsv, toCsv } from "@/lib/format";
 import CommentPanel from "./CommentPanel";
 
@@ -20,8 +19,8 @@ export default function AdminEntriesTable() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const [personFilter, setPersonFilter] = useState<Person | "All">("All");
-  const [channelFilter, setChannelFilter] = useState<Channel | "All">("All");
+  const [personFilter, setPersonFilter] = useState<string>("All");
+  const [channelFilter, setChannelFilter] = useState<string>("All");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -42,6 +41,16 @@ export default function AdminEntriesTable() {
   }
 
   useEffect(load, []);
+
+  const knownPeople = useMemo(() => {
+    if (!entries) return [];
+    return [...new Set(entries.map((e) => e.person))].sort((a, b) => a.localeCompare(b));
+  }, [entries]);
+
+  const knownChannels = useMemo(() => {
+    if (!entries) return [];
+    return [...new Set(entries.map((e) => e.channel))].sort((a, b) => a.localeCompare(b));
+  }, [entries]);
 
   const filtered = useMemo(() => {
     if (!entries) return [];
@@ -111,11 +120,11 @@ export default function AdminEntriesTable() {
           <label className="mb-1 block text-xs font-medium text-ink-muted">Person</label>
           <select
             value={personFilter}
-            onChange={(e) => setPersonFilter(e.target.value as Person | "All")}
+            onChange={(e) => setPersonFilter(e.target.value)}
             className="h-10 rounded-lg border border-line bg-page px-2.5 text-sm text-ink"
           >
             <option value="All">All</option>
-            {PEOPLE.map((p) => (
+            {knownPeople.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
@@ -126,11 +135,11 @@ export default function AdminEntriesTable() {
           <label className="mb-1 block text-xs font-medium text-ink-muted">Channel</label>
           <select
             value={channelFilter}
-            onChange={(e) => setChannelFilter(e.target.value as Channel | "All")}
+            onChange={(e) => setChannelFilter(e.target.value)}
             className="h-10 rounded-lg border border-line bg-page px-2.5 text-sm text-ink"
           >
             <option value="All">All</option>
-            {CHANNELS.map((c) => (
+            {knownChannels.map((c) => (
               <option key={c} value={c}>
                 {c}
               </option>

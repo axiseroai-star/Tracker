@@ -5,7 +5,7 @@ import Link from "next/link";
 
 interface TargetsGroup {
   person: string;
-  channels: { channel: string; dailyTarget: number; unit: string }[];
+  channels: { channel: string; dailyTarget: number; unit: string; archived: boolean }[];
 }
 
 export default function TargetsPage() {
@@ -58,35 +58,38 @@ export default function TargetsPage() {
 
       {groups && (
         <div className="space-y-4">
-          {groups.map((group) => (
-            <div key={group.person} className="rounded-card border border-line bg-card p-5">
-              <h2 className="mb-3 font-semibold text-ink">{group.person}</h2>
-              {group.channels.length === 0 ? (
-                <p className="text-sm text-ink-muted">No target rows yet for this person.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs text-ink-muted">
-                        <th className="pb-2 font-medium">Channel</th>
-                        <th className="pb-2 font-medium">Daily target</th>
-                        <th className="pb-2 font-medium">Unit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.channels.map((c) => (
-                        <tr key={c.channel} className="border-t border-line">
-                          <td className="py-2 text-ink">{c.channel}</td>
-                          <td className="py-2 text-ink">{c.dailyTarget}</td>
-                          <td className="py-2 text-ink-muted">{c.unit}</td>
+          {groups.map((group) => {
+            const activeChannels = group.channels.filter((c) => !c.archived);
+            return (
+              <div key={group.person} className="rounded-card border border-line bg-card p-5">
+                <h2 className="mb-3 font-semibold text-ink">{group.person}</h2>
+                {activeChannels.length === 0 ? (
+                  <p className="text-sm text-ink-muted">No responsibilities yet for this person.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-ink-muted">
+                          <th className="pb-2 font-medium">Channel</th>
+                          <th className="pb-2 font-medium">Daily target</th>
+                          <th className="pb-2 font-medium">Unit</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ))}
+                      </thead>
+                      <tbody>
+                        {activeChannels.map((c) => (
+                          <tr key={c.channel} className="border-t border-line">
+                            <td className="py-2 text-ink">{c.channel}</td>
+                            <td className="py-2 text-ink">{c.dailyTarget}</td>
+                            <td className="py-2 text-ink-muted">{c.unit}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </main>

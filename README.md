@@ -1,12 +1,16 @@
 # Axisero Output Tracker
 
-Internal tool for the 7-person Axisero team to log daily outreach numbers and see
-everyone's output against their targets — one shared web app, backed by Notion.
+Internal tool for the Axisero team to log daily outreach numbers and see everyone's
+output against their targets — one shared web app, backed by Notion.
 
 - Next.js 16 (App Router, TypeScript), Tailwind CSS v4, Recharts
-- Data lives in three Notion data sources (`Axisero Targets`, `Axisero Daily Log`, `Axisero Comments`)
+- Data lives in four Notion data sources (`Axisero Targets`, `Axisero Daily Log`,
+  `Axisero Comments`, `Axisero People`)
 - Two shared passwords — `APP_PASSWORD` (member) and `ADMIN_PASSWORD` (admin) — no per-user accounts
 - All Notion access happens server-side; the integration token never reaches the browser
+- **The team roster is live Notion data, not code (§18).** There's no hardcoded person or
+  channel list anywhere — admin manages who's on the team and what they're responsible
+  for from `/admin`, no redeploy needed. See "Dynamic team & responsibilities" below.
 
 ## One-time setup
 
@@ -14,7 +18,7 @@ everyone's output against their targets — one shared web app, backed by Notion
 
 1. Go to [notion.so/my-integrations](https://www.notion.so/my-integrations) and create a new **internal integration**. This is separate from any Claude↔Notion connection — the app needs its own token.
 2. Copy the **Internal Integration Secret**.
-3. Open all three databases in Notion — `Axisero Targets`, `Axisero Daily Log`, and `Axisero Comments` — and use **"Connect to" / "Add connection"** on each to share it with the new integration. Only share these three; don't grant workspace-wide access. Without this step the API token can't read or write any of them.
+3. Open all four databases in Notion — `Axisero Targets`, `Axisero Daily Log`, `Axisero Comments`, and `Axisero People` — and use **"Connect to" / "Add connection"** on each to share it with the new integration. Only share these four; don't grant workspace-wide access. Without this step the API token can't read or write any of them.
 
 ### 2. Configure environment variables
 
@@ -45,7 +49,7 @@ Open [http://localhost:3000](http://localhost:3000). You'll land on `/login`.
 1. Push this repo, import it into Vercel.
 2. Under **Project Settings → Environment Variables**, add the same variables from
    `.env.local` (do **not** upload the file itself — Vercel encrypts these at rest).
-3. Confirm the Notion integration is still connected to all three databases (step 1.3) —
+3. Confirm the Notion integration is still connected to all four databases (step 1.3) —
    this is the most common "works locally, not in prod" gap.
 
 ## Project structure
@@ -65,18 +69,25 @@ src/
       log/                      Create a Daily Log entry (any person — see §13e note below)
       admin/entries/             GET full history (incl. archived) — admin only
       admin/entries/[id]/         PATCH archived/flagged — admin only
-      admin/comments/             GET/POST comments for a row — admin only
-      admin/targets/[id]/         PATCH Daily Target — admin only
+      admin/comments/             GET/POST top-level comments for a row — admin only
+      admin/targets/               POST a new responsibility — admin only
+      admin/targets/[id]/         PATCH Daily Target and/or Archived — admin only
+      admin/people/                GET all people / POST add a team member — admin only
+      admin/people/[id]/           PATCH Active/Timezone — admin only
+      comments/                    GET visible thread / POST a reply — any session (§16d)
+      comments/[id]/               PATCH/DELETE — admin, or the reply's own Author
   lib/
     notion.ts                 Notion client + query/create/update helpers (server-only)
-    aggregate.ts               Pure rolling-window / attainment / status / comment-count logic
+    aggregate.ts               Pure rolling-window / attainment / status / streak / roster logic
     aggregate.test.ts          Unit tests for the above (`npm test`)
     format.ts                  Display-only date formatting + CSV export
-    constants.ts                PEOPLE, CHANNELS, PERSON_CHANNELS, AVATAR_COLORS
+    constants.ts                DAY_CUTOFF_HOUR, NUDGE_HOUR, STATUS, avatarColorForName
+                                 (no more PEOPLE/CHANNELS/PERSON_CHANNELS — see §18 below)
     auth.ts                     Signed session cookie helpers, roles, admin guard (server-only)
     rate-limit.ts                In-memory limiter for /api/auth/login
   components/                  KpiCard, PersonCard, WeeklyBarChart, ChannelMatrix, …
-                                 AdminEntriesTable, AdminTargetsPanel, CommentPanel, AdminClient
+                                 AdminEntriesTable, AdminTargetsPanel, AdminTeamPanel,
+                                 CommentPanel, PersonCommentsModal, AdminClient
   proxy.ts                     Redirects to /login when the session cookie is missing, and
                                  bounces non-admins away from /admin* (optimistic — see §13a)
                                  (renamed from `middleware.ts` in Next.js 16)
@@ -86,16 +97,16 @@ src/
 
 Rolling window: always `[effectiveDate(person) - 6, effectiveDate(person)]`, recomputed
 on every dashboard load — there's no stored "week" concept. **"Today" is per-person, not
-one shared value (§14).** The team isn't in one timezone: `PERSON_TIMEZONES` in
-`lib/constants.ts` maps each person to an IANA zone, and `effectiveDate(person, now)` in
-`lib/aggregate.ts` converts `now` into their local time — if the local hour is before
-`DAY_CUTOFF_HOUR` (5am), it's still counted as the previous business day. This is the
-single source of truth for "what day is it" for that person, used identically by the
-`/log` date lock, `/api/log`'s server-side check, the missed-today banner, and every
-per-person window/sparkline/KPI. Two people can legitimately have a different
-`effectiveToday` — and therefore a slightly different 7-day window — at the exact same
-moment, which is also why the dashboard header just says "Rolling 7-day window" instead
-of a specific date range.
+one shared value (§14).** The team isn't in one timezone: each person's `Timezone` field
+lives on their `Axisero People` row (§18a, editable from `/admin`'s Team section — no
+redeploy needed), and `effectiveDate(timeZone, now)` in `lib/aggregate.ts` converts `now`
+into that zone's local time — if the local hour is before `DAY_CUTOFF_HOUR` (5am), it's
+still counted as the previous business day. This is the single source of truth for "what
+day is it" for that person, used identically by the `/log` date lock, `/api/log`'s
+server-side check, the missed-today banner, and every per-person window/sparkline/KPI.
+Two people can legitimately have a different `effectiveToday` — and therefore a slightly
+different 7-day window — at the exact same moment, which is also why the dashboard
+header just says "Rolling 7-day window" instead of a specific date range.
 
 ```
 weeklyTarget   = dailyTarget × working days (Mon–Fri) in the window
@@ -113,12 +124,42 @@ nicety, never the actual enforcement. Admin's "log for anyone" form (in `/admin`
 and the server-side check is skipped entirely when `role === "admin"` — that's the only
 path missed-day backfills go through.
 
-The dashboard route makes three Notion queries per load — Daily Log (one date range
-buffered wide enough to cover every person's own window regardless of timezone, roughly
-`today-8` to `today+1` in UTC, `Archived` rows excluded), Targets (cached in-memory for
-5 minutes), and visible Comments (§13d, for the comment-count badge) — then aggregates
-each person's actual window in memory. It never loops a query per person, per channel,
-or per row, even though the effective windows differ per person.
+The dashboard route makes four Notion queries per load — Daily Log (one date range
+buffered wide enough to cover every person's own window regardless of timezone, plus
+streak lookback (§16b), roughly `today-35` to `today+1` in UTC, `Archived` rows
+excluded), Targets (cached in-memory for 5 minutes), visible Comments (§13d/§16d, for
+the comment thread), and People (cached the same way, §18) — then aggregates each
+person's actual window, streak, and comment thread in memory. It never loops a query per
+person, per channel, or per row, even though the effective windows differ per person.
+
+## Dynamic team & responsibilities (§18)
+
+`PEOPLE`, `PERSON_TIMEZONES`, and `PERSON_CHANNELS` no longer exist as hardcoded
+constants — the roster and who's responsible for which channel are both live Notion
+data, cached the same way Targets already was (5-minute in-memory TTL, busted on any
+write). Admin manages all of it from `/admin`, no code change or redeploy required:
+
+- **Team section** — every `Axisero People` row, with an Active toggle and an editable
+  Timezone (saves on blur). "Add team member" creates a new row (`Active: true`) and
+  immediately adds their name as a valid `Person`/`Author` select option on Targets,
+  Daily Log, and Comments via an explicit schema-update call (`ensurePersonOptionEverywhere`
+  in `lib/notion.ts`) — it doesn't wait on/trust Notion's implicit auto-create-on-write.
+  Deactivating someone (never delete) removes them from `/log`, the dashboard person-card
+  grid, and the missed-today check; their history stays fully intact and stays visible in
+  `/admin`.
+- **Responsibilities section** (extends the §13c target editor) — "Add a responsibility"
+  creates a new Targets row: Person is a dropdown of Active people, Channel is a
+  free-text combobox (autocompletes from channels already in use, or type a new one to
+  introduce it — no schema migration needed). Each row also gets an Archive/Restore
+  control (flips `Archived` on Targets, mirroring the Daily Log pattern from §13b/§14) —
+  archived responsibilities drop out of `/log`'s channel list but the row and its
+  historical Daily Log entries stay intact.
+- A person's channel options on `/log` = the distinct, non-archived Targets rows for
+  that person (`channelsForPerson` in `lib/aggregate.ts`) — computed from the same
+  Targets fetch the dashboard already does, no extra Notion call.
+- New team members have no Targets rows yet, so they can't log anything until admin adds
+  at least one responsibility for them — the entry form says so plainly rather than
+  showing an empty channel dropdown.
 
 ## Admin role
 

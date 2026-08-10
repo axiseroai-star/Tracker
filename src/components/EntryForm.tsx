@@ -2,36 +2,56 @@
 
 import { useEffect, useState } from "react";
 import { effectiveDate } from "@/lib/aggregate";
-import { DAY_CUTOFF_HOUR, PEOPLE, PERSON_CHANNELS, type Channel, type Person } from "@/lib/constants";
+import { DAY_CUTOFF_HOUR } from "@/lib/constants";
 import type { Role } from "@/lib/auth";
+
+export interface EntryFormPerson {
+  name: string;
+  timezone: string;
+}
 
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 const CUTOFF_LABEL = `${((DAY_CUTOFF_HOUR + 11) % 12) + 1}${DAY_CUTOFF_HOUR < 12 ? "am" : "pm"}`;
 
-export default function EntryForm({ role }: { role: Role }) {
+export default function EntryForm({
+  role,
+  people,
+  personChannels,
+}: {
+  role: Role;
+  /** The live Active roster (§18) — fetched server-side by the page that renders this form. */
+  people: EntryFormPerson[];
+  /** person name -> their currently-loggable (non-archived) channels (§18b). */
+  personChannels: Record<string, string[]>;
+}) {
   const isLocked = role === "member";
+  const firstPerson = people[0]?.name ?? "";
 
-  const [person, setPerson] = useState<Person>(PEOPLE[0]);
-  const [channel, setChannel] = useState<Channel>(PERSON_CHANNELS[PEOPLE[0]][0]);
-  const [date, setDate] = useState(() => effectiveDate(PEOPLE[0]));
+  const [person, setPerson] = useState(firstPerson);
+  const [channel, setChannel] = useState(personChannels[firstPerson]?.[0] ?? "");
+  const [date, setDate] = useState(() =>
+    firstPerson ? effectiveDate(people[0].timezone) : ""
+  );
   const [outputCount, setOutputCount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
 
-  const allowedChannels = PERSON_CHANNELS[person];
+  const allowedChannels = personChannels[person] ?? [];
 
-  function handlePersonChange(next: Person) {
-    setPerson(next);
+  function handlePersonChange(nextName: string) {
+    setPerson(nextName);
+    const nextChannels = personChannels[nextName] ?? [];
     // Reset synchronously (in the event handler, not an effect) so neither
     // field is ever briefly invalid/stale for the newly-selected person.
-    setChannel(PERSON_CHANNELS[next][0]);
+    setChannel(nextChannels[0] ?? "");
+    const nextPerson = people.find((p) => p.name === nextName);
     // §14b: re-anchor to the new person's own "today" — for members this is
     // the only value the locked field will ever show; for admin it's just a
     // sensible starting point they're free to change afterward.
-    setDate(effectiveDate(next));
+    if (nextPerson) setDate(effectiveDate(nextPerson.timezone));
   }
 
   useEffect(() => {
@@ -77,10 +97,11 @@ export default function EntryForm({ role }: { role: Role }) {
       // Person (and, for admin, whatever Date they set) stays put for fast
       // repeat entry — everything else resets. Members' date is locked to
       // effectiveDate(person) anyway, so re-setting it here is a no-op.
-      setChannel(allowedChannels[0]);
+      setChannel(allowedChannels[0] ?? "");
       setOutputCount("");
       setNotes("");
-      if (isLocked) setDate(effectiveDate(person));
+      const current = people.find((p) => p.name === person);
+      if (isLocked && current) setDate(effectiveDate(current.timezone));
     } catch (err) {
       setToast({
         kind: "error",
@@ -89,6 +110,14 @@ export default function EntryForm({ role }: { role: Role }) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (people.length === 0) {
+    return (
+      <div className="rounded-card border border-dashed border-line bg-card p-6 text-center text-sm text-ink-muted">
+        No active team members yet — add one in /admin&apos;s Team section first.
+      </div>
+    );
   }
 
   return (
@@ -117,12 +146,12 @@ export default function EntryForm({ role }: { role: Role }) {
           <select
             id="person"
             value={person}
-            onChange={(e) => handlePersonChange(e.target.value as Person)}
+            onChange={(e) => handlePersonChange(e.target.value)}
             className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
           >
-            {PEOPLE.map((p) => (
-              <option key={p} value={p}>
-                {p}
+            {people.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
               </option>
             ))}
           </select>
@@ -132,18 +161,24 @@ export default function EntryForm({ role }: { role: Role }) {
           <label htmlFor="channel" className="mb-1.5 block text-sm font-medium text-ink">
             Channel
           </label>
-          <select
-            id="channel"
-            value={channel}
-            onChange={(e) => setChannel(e.target.value as Channel)}
-            className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
-          >
-            {allowedChannels.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          {allowedChannels.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-line bg-page px-3 py-3 text-sm text-ink-muted">
+              {person} has no active responsibilities yet — add one in /admin first.
+            </p>
+          ) : (
+            <select
+              id="channel"
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+            >
+              {allowedChannels.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -200,7 +235,7 @@ export default function EntryForm({ role }: { role: Role }) {
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || allowedChannels.length === 0}
           className="flex h-12 w-full items-center justify-center rounded-lg bg-accent text-base font-semibold text-white transition-opacity disabled:opacity-60"
         >
           {submitting ? "Saving…" : "Log entry"}

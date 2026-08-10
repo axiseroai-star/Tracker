@@ -1,10 +1,22 @@
 import type { ChannelMatrixCell } from "@/lib/aggregate";
-import { CHANNELS, PEOPLE } from "@/lib/constants";
 
-/** Person x Channel heatmap — cell shade = output volume, dot = channel not in this person's lineup. */
+/**
+ * Person x Channel heatmap — cell shade = output volume, dot = channel not
+ * in this person's current lineup. Rows/columns are derived from the cells
+ * themselves (already the full Active roster x known-channel grid, built
+ * server-side by buildDashboard) rather than an imported constant — the
+ * roster and channel list are both live/dynamic now (§18).
+ */
 export default function ChannelMatrix({ cells }: { cells: ChannelMatrixCell[] }) {
   const maxTotal = Math.max(...cells.map((c) => c.total), 1);
   const byKey = new Map(cells.map((c) => [`${c.person}__${c.channel}`, c]));
+
+  const people = [...new Set(cells.map((c) => c.person))];
+  const channels = [...new Set(cells.map((c) => c.channel))].sort((a, b) => a.localeCompare(b));
+
+  if (people.length === 0 || channels.length === 0) {
+    return <p className="text-sm text-ink-muted">Nothing to show yet.</p>;
+  }
 
   return (
     <div className="overflow-x-auto">
@@ -14,7 +26,7 @@ export default function ChannelMatrix({ cells }: { cells: ChannelMatrixCell[] })
             <th className="sticky left-0 z-10 bg-card px-3 py-2 text-left text-xs font-medium text-ink-muted">
               Person
             </th>
-            {CHANNELS.map((channel) => (
+            {channels.map((channel) => (
               <th
                 key={channel}
                 className="whitespace-nowrap px-2 py-2 text-center text-[11px] font-medium text-ink-muted"
@@ -25,12 +37,12 @@ export default function ChannelMatrix({ cells }: { cells: ChannelMatrixCell[] })
           </tr>
         </thead>
         <tbody>
-          {PEOPLE.map((person) => (
+          {people.map((person) => (
             <tr key={person}>
               <td className="sticky left-0 z-10 whitespace-nowrap border-t border-line bg-card px-3 py-2 text-left font-medium text-ink">
                 {person}
               </td>
-              {CHANNELS.map((channel) => {
+              {channels.map((channel) => {
                 const cell = byKey.get(`${person}__${channel}`);
                 const total = cell?.total ?? 0;
                 const assigned = cell?.assigned ?? false;

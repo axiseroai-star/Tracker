@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { requireAdminResponse } from "@/lib/auth";
-import { createComment, queryCommentsForLogEntry } from "@/lib/notion";
+import { createComment, queryVisibleCommentsForLogEntry } from "@/lib/notion";
+import { getSession } from "@/lib/auth";
 
-/** Every comment (visible or not) on one Daily Log row — admin only. */
+/**
+ * Member-facing thread endpoints (§16d) — any authenticated session (member
+ * or admin), unlike /api/admin/comments which is admin-only and also sees
+ * hidden comments. This surface only ever reads/writes *visible* comments.
+ */
+
 export async function GET(request: NextRequest) {
-  const denied = await requireAdminResponse();
-  if (denied) return denied;
+  const session = await getSession();
+  if (!session) return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
 
   const logEntryId = request.nextUrl.searchParams.get("logEntryId");
   if (!logEntryId) {
@@ -14,7 +19,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const comments = await queryCommentsForLogEntry(logEntryId);
+    const comments = await queryVisibleCommentsForLogEntry(logEntryId);
     return NextResponse.json({ comments });
   } catch (error) {
     console.error(
@@ -25,10 +30,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** New comments default to Visible To Person = true (§13b). */
+/** A reply — always tagged with the submitted Author and Visible To Person = true (§16d). */
 export async function POST(request: NextRequest) {
-  const denied = await requireAdminResponse();
-  if (denied) return denied;
+  const session = await getSession();
+  if (!session) return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
 
   let body: unknown;
   try {
@@ -37,7 +42,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const { logEntryId, comment, visibleToPerson } = (body ?? {}) as Record<string, unknown>;
+  const { logEntryId, comment, author } = (body ?? {}) as Record<string, unknown>;
 
   if (typeof logEntryId !== "string" || logEntryId.length === 0) {
     return NextResponse.json({ ok: false, error: "logEntryId is required." }, { status: 400 });
@@ -45,26 +50,23 @@ export async function POST(request: NextRequest) {
   if (typeof comment !== "string" || comment.trim().length === 0) {
     return NextResponse.json({ ok: false, error: "Comment text is required." }, { status: 400 });
   }
-  if (visibleToPerson !== undefined && typeof visibleToPerson !== "boolean") {
-    return NextResponse.json(
-      { ok: false, error: "visibleToPerson must be a boolean." },
-      { status: 400 }
-    );
+  if (typeof author !== "string" || author.trim().length === 0) {
+    return NextResponse.json({ ok: false, error: "Author is required." }, { status: 400 });
   }
 
   try {
     await createComment({
       logEntryId,
       comment: comment.trim().slice(0, 2000),
-      author: "Admin",
-      visibleToPerson,
+      author: author.trim(),
+      visibleToPerson: true,
     });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error(
-      "Failed to create comment:",
+      "Failed to create reply:",
       error instanceof Error ? error.message : "unknown error"
     );
-    return NextResponse.json({ ok: false, error: "Failed to save comment." }, { status: 500 });
+    return NextResponse.json({ ok: false, error: "Failed to save reply." }, { status: 500 });
   }
 }
