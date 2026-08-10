@@ -5,11 +5,12 @@ import { useEffect, useState } from "react";
 interface Comment {
   id: string;
   comment: string;
+  author: string | null;
   visibleToPerson: boolean;
   commentedAt: string | null;
 }
 
-/** Modal comment thread for one Daily Log row (§13c) — admin only. */
+/** Modal comment thread for one Daily Log row (§13c, §16d) — admin only. Admin can edit/delete any comment. */
 export default function CommentPanel({
   logEntryId,
   title,
@@ -24,6 +25,9 @@ export default function CommentPanel({
   const [text, setText] = useState("");
   const [visibleToPerson, setVisibleToPerson] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   function load() {
     fetch(`/api/admin/comments?logEntryId=${encodeURIComponent(logEntryId)}`)
@@ -63,6 +67,48 @@ export default function CommentPanel({
     }
   }
 
+  function startEdit(c: Comment) {
+    setEditingId(c.id);
+    setEditText(c.comment);
+  }
+
+  async function saveEdit(c: Comment) {
+    if (!editText.trim()) return;
+    setBusyId(c.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/comments/${encodeURIComponent(c.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comment: editText.trim() }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.ok) throw new Error(result.error || "Failed to save edit.");
+      setEditingId(null);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save edit.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(c: Comment) {
+    if (!window.confirm("Delete this comment?")) return;
+    setBusyId(c.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/comments/${encodeURIComponent(c.id)}`, { method: "DELETE" });
+      const result = await res.json();
+      if (!res.ok || !result.ok) throw new Error(result.error || "Failed to delete.");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 sm:items-center sm:p-4">
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-t-card bg-card sm:rounded-card">
@@ -83,16 +129,62 @@ export default function CommentPanel({
             <ul className="space-y-3">
               {comments.map((c) => (
                 <li key={c.id} className="rounded-lg border border-line bg-page p-3">
-                  <p className="text-sm text-ink">{c.comment}</p>
-                  <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-muted">
-                    {c.commentedAt && <span>{new Date(c.commentedAt).toLocaleString()}</span>}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-ink">{c.author ?? "Admin"}</span>
                     <span
-                      className={`rounded-full px-1.5 py-0.5 ${
+                      className={`rounded-full px-1.5 py-0.5 text-[11px] ${
                         c.visibleToPerson ? "bg-good-soft text-good" : "bg-none-soft text-none"
                       }`}
                     >
                       {c.visibleToPerson ? "Visible to person" : "Admin only"}
                     </span>
+                  </div>
+                  {editingId === c.id ? (
+                    <div className="mt-1.5">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                      />
+                      <div className="mt-1.5 flex gap-2">
+                        <button
+                          onClick={() => saveEdit(c)}
+                          disabled={busyId === c.id}
+                          className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-sm text-ink">{c.comment}</p>
+                  )}
+                  <div className="mt-1.5 flex items-center gap-3 text-[11px] text-ink-muted">
+                    {c.commentedAt && <span>{new Date(c.commentedAt).toLocaleString()}</span>}
+                    {editingId !== c.id && (
+                      <>
+                        <button
+                          onClick={() => startEdit(c)}
+                          className="font-medium text-accent hover:underline"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(c)}
+                          disabled={busyId === c.id}
+                          className="font-medium text-risk hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
                   </div>
                 </li>
               ))}

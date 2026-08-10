@@ -78,6 +78,9 @@ export default function DashboardClient({ role }: { role: Role }) {
           <Link href="/targets" className="text-sm font-medium text-ink-muted hover:text-ink">
             Targets
           </Link>
+          <Link href="/trends" className="text-sm font-medium text-ink-muted hover:text-ink">
+            Trends
+          </Link>
           {role === "admin" && (
             <Link href="/admin" className="text-sm font-medium text-ink-muted hover:text-ink">
               Admin
@@ -186,6 +189,7 @@ export default function DashboardClient({ role }: { role: Role }) {
         <PersonCommentsModal
           personName={commentsFor.person}
           comments={commentsFor.comments}
+          people={data ? data.people.map((p) => p.person) : []}
           onClose={() => setCommentsFor(null)}
         />
       )}

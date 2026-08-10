@@ -17,7 +17,15 @@ interface TargetGroup {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-function EditableTargetRow({ row, onChanged }: { row: TargetRow; onChanged: () => void }) {
+function EditableTargetRow({
+  row,
+  suggestion,
+  onChanged,
+}: {
+  row: TargetRow;
+  suggestion?: number;
+  onChanged: () => void;
+}) {
   const [value, setValue] = useState(String(row.dailyTarget));
   const [state, setState] = useState<SaveState>("idle");
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -64,14 +72,28 @@ function EditableTargetRow({ row, onChanged }: { row: TargetRow; onChanged: () =
     <tr className={row.archived ? "opacity-50" : undefined}>
       <td className="border-t border-line py-2 pr-3 text-ink">{row.channel}</td>
       <td className="border-t border-line py-2 pr-3">
-        <input
-          type="number"
-          min={0}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onBlur={commit}
-          className="h-9 w-24 rounded-lg border border-line bg-page px-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
-        />
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={commit}
+            className="h-9 w-24 rounded-lg border border-line bg-page px-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+          />
+          {suggestion !== undefined && (
+            <span className="whitespace-nowrap text-[11px] text-ink-muted">
+              Recent avg: {suggestion}{" "}
+              <button
+                type="button"
+                onClick={() => setValue(String(suggestion))}
+                className="font-medium text-accent hover:underline"
+              >
+                Use suggestion
+              </button>
+            </span>
+          )}
+        </div>
       </td>
       <td className="border-t border-line py-2 pr-3 text-ink-muted">{row.unit}</td>
       <td className="border-t border-line py-2 pr-3 text-xs">
@@ -96,6 +118,8 @@ export default function AdminTargetsPanel({ people }: { people: string[] }) {
   const [groups, setGroups] = useState<TargetGroup[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [suggestions, setSuggestions] = useState<Record<string, Record<string, number>>>({});
+  const [suggestionWindow, setSuggestionWindow] = useState(14);
 
   const [newPerson, setNewPerson] = useState(people[0] ?? "");
   const [newChannel, setNewChannel] = useState("");
@@ -115,6 +139,19 @@ export default function AdminTargetsPanel({ people }: { people: string[] }) {
   }
 
   useEffect(load, []);
+
+  useEffect(() => {
+    fetch("/api/admin/target-suggestions")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!json) return;
+        setSuggestions(json.averages ?? {});
+        setSuggestionWindow(json.windowDays ?? 14);
+      })
+      .catch(() => {
+        // Suggestions are a nice-to-have — silently skip if this fails.
+      });
+  }, []);
 
   const knownChannels = useMemo(() => {
     if (!groups) return [];
@@ -226,15 +263,20 @@ export default function AdminTargetsPanel({ people }: { people: string[] }) {
         {addError && <p className="text-sm text-risk">{addError}</p>}
       </form>
 
-      <label className="mb-4 flex items-center gap-2 text-sm text-ink-muted">
-        <input
-          type="checkbox"
-          checked={showArchived}
-          onChange={(e) => setShowArchived(e.target.checked)}
-          className="h-4 w-4 rounded border-line"
-        />
-        Show archived
-      </label>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <label className="flex items-center gap-2 text-sm text-ink-muted">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="h-4 w-4 rounded border-line"
+          />
+          Show archived
+        </label>
+        <p className="text-xs text-ink-muted">
+          &ldquo;Recent avg&rdquo; = average daily output over the last {suggestionWindow} days.
+        </p>
+      </div>
 
       {error && <p className="text-sm text-risk">{error}</p>}
       {!groups && !error && <div className="skeleton h-40 rounded-card" />}
@@ -261,7 +303,12 @@ export default function AdminTargetsPanel({ people }: { people: string[] }) {
                       </thead>
                       <tbody>
                         {visible.map((row) => (
-                          <EditableTargetRow key={row.id} row={row} onChanged={load} />
+                          <EditableTargetRow
+                            key={row.id}
+                            row={row}
+                            suggestion={suggestions[group.person]?.[row.channel]}
+                            onChanged={load}
+                          />
                         ))}
                       </tbody>
                     </table>

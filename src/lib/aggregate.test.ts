@@ -11,6 +11,8 @@ import {
   computeStreak,
   channelsForPerson,
   allKnownChannels,
+  buildTrends,
+  buildChannelAverages,
   buildDashboard,
   type PersonRecord,
   type DailyLogEntry,
@@ -185,6 +187,50 @@ test("allKnownChannels: union of target (incl. archived) and log channels, sorte
   const targets = [target("t1", "A", "Zeta"), target("t2", "A", "Alpha", true)];
   const logs = [log("l1", "2026-08-01"), { ...log("l2", "2026-08-02"), channel: "Beta" }];
   assert.deepEqual(allKnownChannels(targets, logs), ["Alpha", "Beta", "Y", "Zeta"]);
+});
+
+// --- buildTrends (§16a) / buildChannelAverages (§16c) -----------------------
+
+test("buildTrends: per-person daily series, 0-filled, oldest first", () => {
+  const people: PersonRecord[] = [
+    { id: "p1", name: "Ahsan Aftab", timezone: "Europe/Berlin", active: true, slackHandle: null },
+  ];
+  const logs = [
+    { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-01", outputCount: 10 },
+    { id: "l2", person: "Ahsan Aftab", channel: "WhatsApp", date: "2026-08-01", outputCount: 5 },
+    { id: "l3", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-03", outputCount: 7 },
+  ];
+  const trends = buildTrends({ people, logs, startISO: "2026-08-01", endISO: "2026-08-03" });
+  assert.equal(trends.length, 1);
+  assert.equal(trends[0].total, 22);
+  assert.deepEqual(trends[0].daily, [
+    { date: "2026-08-01", total: 15 },
+    { date: "2026-08-02", total: 0 },
+    { date: "2026-08-03", total: 7 },
+  ]);
+});
+
+test("buildTrends: archived entries are excluded", () => {
+  const people: PersonRecord[] = [
+    { id: "p1", name: "A", timezone: "UTC", active: true, slackHandle: null },
+  ];
+  const logs = [
+    { id: "l1", person: "A", channel: "X", date: "2026-08-01", outputCount: 10, archived: true },
+  ];
+  const trends = buildTrends({ people, logs, startISO: "2026-08-01", endISO: "2026-08-01" });
+  assert.equal(trends[0].total, 0);
+});
+
+test("buildChannelAverages: average daily output per person/channel over the window", () => {
+  const logs: DailyLogEntry[] = [
+    { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-01", outputCount: 20 },
+    { id: "l2", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-02", outputCount: 10 },
+    { id: "l3", person: "Ahsan Aftab", channel: "WhatsApp", date: "2026-08-02", outputCount: 6 },
+  ];
+  const averages = buildChannelAverages({ logs, startISO: "2026-08-01", endISO: "2026-08-02" });
+  // Cold Email: (20+10)/2 days = 15; WhatsApp: 6/2 days = 3.
+  assert.equal(averages["Ahsan Aftab"]["Cold Email"], 15);
+  assert.equal(averages["Ahsan Aftab"]["WhatsApp"], 3);
 });
 
 // --- buildDashboard (hand-computed example) --------------------------------

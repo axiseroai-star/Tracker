@@ -203,6 +203,64 @@ export function allKnownChannels(targets: TargetRow[], logs: DailyLogEntry[]): s
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
+// ---------------------------------------------------------------------------
+// Trend view (§16a) and target auto-suggestions (§16c) — both just different
+// views of "per-person(/channel) output over N days", so they share this.
+// ---------------------------------------------------------------------------
+
+export interface TrendPerson {
+  person: string;
+  total: number;
+  daily: { date: string; total: number }[]; // every day in range, 0-filled, oldest first
+}
+
+/** Per-person daily output over [startISO, endISO] — the data behind /trends. */
+export function buildTrends(params: {
+  people: PersonRecord[];
+  logs: DailyLogEntry[];
+  startISO: string;
+  endISO: string;
+}): TrendPerson[] {
+  const { people, logs, startISO, endISO } = params;
+  const dates = dateRangeISO(startISO, endISO);
+
+  return people.map((p) => {
+    const personLogs = logs.filter((l) => l.person === p.name && !l.archived);
+    const daily = dates.map((date) => ({
+      date,
+      total: personLogs.filter((l) => l.date === date).reduce((s, l) => s + l.outputCount, 0),
+    }));
+    return { person: p.name, total: daily.reduce((s, d) => s + d.total, 0), daily };
+  });
+}
+
+/** person -> channel -> average daily output over [startISO, endISO] (§16c "Recent avg"). */
+export function buildChannelAverages(params: {
+  logs: DailyLogEntry[];
+  startISO: string;
+  endISO: string;
+}): Record<string, Record<string, number>> {
+  const { logs, startISO, endISO } = params;
+  const dayCount = dateRangeISO(startISO, endISO).length || 1;
+  const inRange = (iso: string) => toUTCDate(iso) >= toUTCDate(startISO) && toUTCDate(iso) <= toUTCDate(endISO);
+
+  const sums: Record<string, Record<string, number>> = {};
+  for (const l of logs) {
+    if (l.archived || !inRange(l.date)) continue;
+    sums[l.person] ??= {};
+    sums[l.person][l.channel] = (sums[l.person][l.channel] ?? 0) + l.outputCount;
+  }
+
+  const averages: Record<string, Record<string, number>> = {};
+  for (const [person, byChannel] of Object.entries(sums)) {
+    averages[person] = {};
+    for (const [channel, sum] of Object.entries(byChannel)) {
+      averages[person][channel] = Math.round((sum / dayCount) * 10) / 10;
+    }
+  }
+  return averages;
+}
+
 /** Minimal shape needed to correlate a visible comment back to a person (§13d badge/popover, §16d thread). */
 export interface CommentRef {
   id: string;

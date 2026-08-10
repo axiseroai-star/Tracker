@@ -120,18 +120,35 @@ export async function requireAdminResponse(): Promise<NextResponse | null> {
   return null;
 }
 
-/** Constant-time compare against an env var; false (never throws) if the env var isn't set. */
-function matchesEnvPassword(candidate: string, envVarName: "APP_PASSWORD" | "ADMIN_PASSWORD"): boolean {
-  const expected = process.env[envVarName];
+/** Constant-time compare against a known-good value; false (never throws) if it's empty. */
+function matches(candidate: string, expected: string): boolean {
   if (!expected) return false;
   const a = createHmac("sha256", secret()).update(candidate).digest();
   const b = createHmac("sha256", secret()).update(expected).digest();
   return timingSafeEqual(a, b);
 }
 
+/**
+ * §16f: a second (or third, ...) admin. ADMIN_PASSWORDS is a comma-separated
+ * list — any match grants admin. Falls back to the singular ADMIN_PASSWORD if
+ * ADMIN_PASSWORDS isn't set, so existing single-admin setups don't break.
+ */
+function adminPasswords(): string[] {
+  const list = process.env.ADMIN_PASSWORDS;
+  if (list) {
+    return list
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }
+  return process.env.ADMIN_PASSWORD ? [process.env.ADMIN_PASSWORD] : [];
+}
+
 /** Resolves a submitted password to a role, admin checked first. Null if it matches neither. */
 export function resolveRole(candidate: string): Role | null {
-  if (matchesEnvPassword(candidate, "ADMIN_PASSWORD")) return "admin";
-  if (matchesEnvPassword(candidate, "APP_PASSWORD")) return "member";
+  for (const admin of adminPasswords()) {
+    if (matches(candidate, admin)) return "admin";
+  }
+  if (matches(candidate, process.env.APP_PASSWORD ?? "")) return "member";
   return null;
 }
