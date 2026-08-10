@@ -27,11 +27,6 @@ export default function PersonCard({
             <p className="font-semibold text-ink">{person.person}</p>
             <p className="text-xs text-ink-muted">
               {person.channelsActive} channel{person.channelsActive === 1 ? "" : "s"} active
-              {person.streak > 0 && (
-                <span className="ml-1.5" title={`${person.streak}-day logging streak`}>
-                  🔥 {person.streak}-day streak
-                </span>
-              )}
             </p>
           </div>
         </div>

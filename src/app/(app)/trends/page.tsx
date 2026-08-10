@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import {
   Bar,
   BarChart,
@@ -54,23 +53,18 @@ export default function TrendsPage() {
             7-day window.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-lg border border-line bg-card p-1 text-xs">
-            {([30, 90] as Range[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => handleRangeChange(r)}
-                className={`rounded-md px-3 py-1.5 font-medium ${
-                  range === r ? "bg-accent-soft text-accent" : "text-ink-muted"
-                }`}
-              >
-                {r} days
-              </button>
-            ))}
-          </div>
-          <Link href="/" className="text-sm font-medium text-accent hover:underline">
-            Dashboard →
-          </Link>
+        <div className="flex items-center gap-1 rounded-lg border border-line bg-card p-1 text-xs">
+          {([30, 90] as Range[]).map((r) => (
+            <button
+              key={r}
+              onClick={() => handleRangeChange(r)}
+              className={`rounded-md px-3 py-1.5 font-medium ${
+                range === r ? "bg-accent-soft text-accent" : "text-ink-muted"
+              }`}
+            >
+              {r} days
+            </button>
+          ))}
         </div>
       </header>
 

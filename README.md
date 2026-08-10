@@ -85,12 +85,15 @@ cookie every other route uses).
 src/
   app/
     login/page.tsx          Per-person PIN login — pick a name, create/enter your PIN (§20)
-    page.tsx                 Dashboard (default landing page) — Server Component, resolves session
-    log/page.tsx              Daily entry form — Person is your own session identity, not a pick
-    targets/page.tsx          Read-only targets view (members)
-    trends/page.tsx            Per-person output over 30/90 days (§16a)
     meeting/page.tsx            Chrome-free, large-text dashboard subset for screen-share (§16i)
-    admin/page.tsx             Admin console — Server Component, redirects non-admins (§13a)
+    (app)/                    Route group sharing the sidebar shell (§22) — folder name is
+                                 excluded from the URL, so these pages are still /, /log, etc.
+      layout.tsx                 Resolves the session, wraps children in <AppShell>
+      page.tsx                    Dashboard (default landing page) — Server Component
+      log/page.tsx                 Daily entry form — Person is your own session identity, not a pick
+      targets/page.tsx             Read-only targets view (members)
+      trends/page.tsx                Per-person output over 30/90 days (§16a)
+      admin/page.tsx                 Admin console — Server Component, redirects non-admins (§13a)
     api/
       auth/people/               GET the Active roster + whether each has a PIN yet — pre-auth (§20b)
       auth/login|logout/         Create/verify a PIN and issue the session, or clear it (§20b)
@@ -114,7 +117,7 @@ src/
       cron/digest/                  Weekly Slack KPI digest (§16g)
   lib/
     notion.ts                 Notion client + query/create/update helpers (server-only)
-    aggregate.ts               Pure rolling-window / attainment / status / streak / trend / roster logic
+    aggregate.ts               Pure rolling-window / attainment / status / trend / roster logic
     aggregate.test.ts          Unit tests for the above (`npm test`)
     dashboard-data.ts           Shared fetch+aggregate used by /api/dashboard and the digest cron
     format.ts                  Display-only date formatting + CSV export
@@ -125,10 +128,10 @@ src/
     auth.ts                     Signed session cookie helpers ({person, role}), admin + cron
                                  guards (server-only) — no more password resolution (§20)
     rate-limit.ts                In-memory limiter for /api/auth/login
-  components/                  KpiCard, PersonCard, WeeklyBarChart, ChannelMatrix, …
-                                 AdminEntriesTable, AdminTargetsPanel, AdminTeamPanel,
-                                 CommentPanel, PersonCommentsModal, AdminClient,
-                                 ServiceWorkerRegister
+  components/                  AppShell (sidebar + mobile tab bar, §22), KpiCard, PersonCard,
+                                 WeeklyBarChart, ChannelMatrix, AdminEntriesTable,
+                                 AdminTargetsPanel, AdminTeamPanel, CommentPanel,
+                                 PersonCommentsModal, AdminClient, ServiceWorkerRegister
   proxy.ts                     Redirects to /login when the session cookie is missing (except
                                  /api/cron/*, which use their own CRON_SECRET check instead),
                                  and bounces non-admins away from /admin* (optimistic — §13a)
@@ -138,6 +141,29 @@ public/
   sw.js                        Minimal pass-through service worker — no offline caching for v1
   icons/                       192/512/maskable-512/apple-touch PNGs
 ```
+
+## UI: sidebar navigation (§22)
+
+Navigation lives in a persistent left sidebar (`AppShell.tsx`), not a per-page top bar.
+Every page under the `(app)` route group — Dashboard, Log, Targets, Trends, Admin —
+shares it via `app/(app)/layout.tsx`, which resolves the session once and renders
+`<AppShell>` around whatever page is active; each page itself now renders only its own
+heading and content, no nav chrome.
+
+- **Desktop (≥768px):** fixed sidebar — "Axisero / Output Tracker" branding, a full-width
+  accent **"+ Log output"** button, then the nav list (Dashboard, Targets, Trends, Meeting
+  view, and Admin when `role === "admin"`) with an accent-tinted highlight on the active
+  route. The logged-in person's name and a **Log out** button are pinned at the bottom.
+- **Mobile (<768px):** the sidebar becomes a fixed bottom tab bar — Dashboard, Log, and a
+  **More** tab (not a hamburger drawer) that pops up the rest — Targets, Trends, Meeting
+  view, Admin, and Log out — so "Log output" is always one tap away.
+- The Admin *link* is only ever hidden/shown by role — it was never the access control.
+  `app/(app)/admin/page.tsx`'s server-side `redirect("/")` for non-admins (§13a) is
+  unchanged and is what actually enforces it.
+- `/login` (pre-auth) and `/meeting` (deliberately chrome-free, §16i) live outside the
+  `(app)` route group and never render this shell.
+- A per-person streak counter (§16b) was designed but cancelled before shipping — see
+  "Trends" below for what actually exists.
 
 ## How the numbers are computed
 
@@ -174,12 +200,12 @@ fully editable), the one deliberate exception, and the only path missed-day back
 through.
 
 The dashboard route makes four Notion queries per load — Daily Log (one date range
-buffered wide enough to cover every person's own window regardless of timezone, plus
-streak lookback (§16b), roughly `today-35` to `today+1` in UTC, `Archived` rows
+buffered wide enough to cover every person's current-week *and* previous-week window
+regardless of timezone, roughly `today-15` to `today+1` in UTC, `Archived` rows
 excluded), Targets (cached in-memory for 5 minutes), visible Comments (§13d/§16d, for
 the comment thread), and People (cached the same way, §18) — then aggregates each
-person's actual window, streak, and comment thread in memory. It never loops a query per
-person, per channel, or per row, even though the effective windows differ per person.
+person's actual window and comment thread in memory. It never loops a query per person,
+per channel, or per row, even though the effective windows differ per person.
 
 ## Dynamic team & responsibilities (§18)
 
@@ -278,17 +304,15 @@ Person field is read from a verified session identity, not a free pick, and `/ap
 enforces server-side that acting as someone else requires `role === "admin"` — the one
 remaining, deliberate exception (admin's "log for anyone" form), not a general gap anymore.
 
-## Trends and streaks (§16a, §16b)
+## Trends (§16a)
 
 `/trends` shows each active person's daily output over the last 30 or 90 days — a
 separate, paginated Daily Log query (`queryDailyLogByDateRange` already pages via
 `start_cursor` internally), independent of the dashboard's rolling 7-day window and not
-sharing its query budget. On the dashboard itself, each person card shows a
-🔥 *N*-day streak — consecutive calendar days (by that person's own `effectiveDate`)
-with at least one non-archived entry, counting back from today until the first gap —
-computed from the same buffered Daily Log fetch the rest of the dashboard already uses
-(no extra Notion call), so it's only as accurate as that fetch's lookback window
-(~35 days) before it silently caps out.
+sharing its query budget.
+
+> A per-person streak counter (§16b) was built and then cancelled before shipping — it's
+> not part of the app.
 
 ## Two-way comments (§16d, §20c)
 
@@ -314,7 +338,7 @@ window. It auto-refreshes every 90 seconds with no visible controls.
 ## Testing
 
 ```bash
-npm test    # unit tests for lib/aggregate.ts — workingDays, attainment, status, streaks,
+npm test    # unit tests for lib/aggregate.ts — workingDays, attainment, status,
             # trends/channel-averages, and buildDashboard, all against an injected roster
 npm run lint
 npm run build

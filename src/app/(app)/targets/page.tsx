@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 
 interface TargetsGroup {
   person: string;
@@ -29,21 +28,16 @@ export default function TargetsPage() {
           <h1 className="text-2xl font-bold text-ink">Targets</h1>
           <p className="text-sm text-ink-muted">Read-only here — edit numbers directly in Notion.</p>
         </div>
-        <div className="flex items-center gap-3">
-          {process.env.NEXT_PUBLIC_TARGETS_DATABASE_URL && (
-            <a
-              href={process.env.NEXT_PUBLIC_TARGETS_DATABASE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-lg border border-line bg-card px-3 py-2 text-sm font-medium text-ink hover:bg-page"
-            >
-              Edit in Notion ↗
-            </a>
-          )}
-          <Link href="/" className="text-sm font-medium text-accent hover:underline">
-            Dashboard →
-          </Link>
-        </div>
+        {process.env.NEXT_PUBLIC_TARGETS_DATABASE_URL && (
+          <a
+            href={process.env.NEXT_PUBLIC_TARGETS_DATABASE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg border border-line bg-card px-3 py-2 text-sm font-medium text-ink hover:bg-page"
+          >
+            Edit in Notion ↗
+          </a>
+        )}
       </header>
 
       {error && <p className="text-sm text-risk">{error}</p>}

@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import KpiCard from "@/components/KpiCard";
 import MissedTodayBanner from "@/components/MissedTodayBanner";
 import WeeklyBarChart from "@/components/WeeklyBarChart";
@@ -10,12 +9,10 @@ import PersonCard from "@/components/PersonCard";
 import ChannelMatrix from "@/components/ChannelMatrix";
 import PersonCommentsModal from "@/components/PersonCommentsModal";
 import type { DashboardPerson, DashboardResult } from "@/lib/aggregate";
-import type { Role } from "@/lib/auth";
 
 type SortMode = "attainment" | "name";
 
-export default function DashboardClient({ role, person }: { role: Role; person: string }) {
-  const router = useRouter();
+export default function DashboardClient({ person }: { person: string }) {
   const [data, setData] = useState<DashboardResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commentsFor, setCommentsFor] = useState<DashboardPerson | null>(null);
@@ -50,52 +47,18 @@ export default function DashboardClient({ role, person }: { role: Role; person: 
     return people;
   }, [data, sortMode]);
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  }
-
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:py-8">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-ink">Axisero Output Tracker</h1>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* §14c: each person's 7-day window can differ by up to a day depending on
-              their timezone/cutoff hour, so there's no one date range to show here anymore. */}
-          <span
-            className="rounded-full border border-line bg-card px-3 py-1 text-xs font-medium text-ink-muted"
-            title="Each person's window is their own last 7 days, based on their timezone"
-          >
-            Rolling 7-day window
-          </span>
-          <Link
-            href="/log"
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white"
-          >
-            Log output
-          </Link>
-          <Link href="/targets" className="text-sm font-medium text-ink-muted hover:text-ink">
-            Targets
-          </Link>
-          <Link href="/trends" className="text-sm font-medium text-ink-muted hover:text-ink">
-            Trends
-          </Link>
-          <Link href="/meeting" className="text-sm font-medium text-ink-muted hover:text-ink">
-            Meeting view
-          </Link>
-          {role === "admin" && (
-            <Link href="/admin" className="text-sm font-medium text-ink-muted hover:text-ink">
-              Admin
-            </Link>
-          )}
-          <button
-            onClick={handleLogout}
-            className="text-sm font-medium text-ink-muted hover:text-ink"
-          >
-            Log out
-          </button>
-        </div>
+        <h1 className="text-2xl font-bold text-ink">Dashboard</h1>
+        {/* §14c: each person's 7-day window can differ by up to a day depending on
+            their timezone/cutoff hour, so there's no one date range to show here anymore. */}
+        <span
+          className="rounded-full border border-line bg-card px-3 py-1 text-xs font-medium text-ink-muted"
+          title="Each person's window is their own last 7 days, based on their timezone"
+        >
+          Rolling 7-day window
+        </span>
       </header>
 
       {error && (

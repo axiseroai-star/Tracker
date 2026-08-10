@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import EntryForm from "@/components/EntryForm";
 import { getSession } from "@/lib/auth";
@@ -32,15 +31,10 @@ export default async function LogPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-lg px-4 py-8 sm:py-12">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-ink">Log output</h1>
-          <p className="text-sm text-ink-muted">Add today&apos;s numbers for a channel.</p>
-        </div>
-        <Link href="/" className="text-sm font-medium text-accent hover:underline">
-          Dashboard →
-        </Link>
+    <main className="mx-auto w-full max-w-lg px-4 py-6 sm:py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-ink">Log output</h1>
+        <p className="text-sm text-ink-muted">Add today&apos;s numbers for a channel.</p>
       </div>
       {loadError ? (
         <p className="rounded-card border border-risk/30 bg-risk-soft px-4 py-3 text-sm text-risk">

@@ -1,7 +1,7 @@
 /**
  * Pure aggregation logic: rolling-window math, attainment/status rules,
- * per-person day boundaries, streaks, and the full dashboard shape-building
- * used by /api/dashboard.
+ * per-person day boundaries, and the full dashboard shape-building used by
+ * /api/dashboard.
  *
  * Side-effect-free (no Notion calls) so it's easy to unit test — see
  * aggregate.test.ts. `now` and the roster (`people`) are always injected
@@ -122,27 +122,6 @@ export function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-/**
- * §16b: consecutive calendar days (ending at `effectiveToday`, going
- * backward) with at least one non-archived entry, stopping at the first gap.
- * If `effectiveToday` itself has no entry yet, the streak is 0 — this is the
- * literal "counting backward from today until the first gap" rule; it isn't
- * padded to "yesterday's streak" just because today hasn't been logged yet.
- *
- * Only as accurate as how far back `personLogs` reaches — the caller controls
- * that via how wide a date range it queried (see /api/dashboard's buffer).
- */
-export function computeStreak(personLogs: DailyLogEntry[], effectiveToday: string): number {
-  const loggedDates = new Set(personLogs.filter((l) => !l.archived).map((l) => l.date));
-  let streak = 0;
-  let cursor = effectiveToday;
-  while (loggedDates.has(cursor)) {
-    streak++;
-    cursor = addDaysISO(cursor, -1);
-  }
-  return streak;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +281,6 @@ export interface DashboardPerson {
   attainmentPct: number | null;
   statusKey: StatusKey;
   channelsActive: number;
-  streak: number; // §16b
   sparkline: number[]; // 7 values, oldest -> newest, aligned to this person's own window
   channelTags: string[]; // this person's assigned (non-archived) channels
   commentCount: number; // = comments.length, kept as a field since it's read so often
@@ -342,10 +320,10 @@ export function buildDashboard(params: {
   /** The live, Active-only roster (§18e) — never a hardcoded list. */
   people: PersonRecord[];
   /**
-   * Should span every person's possible window (plus streak lookback) with
-   * buffer room — the caller queries Notion once with a wide enough date
-   * range (see /api/dashboard) and this function filters/aggregates per
-   * person from that single in-memory set. Never fetch per person.
+   * Should span every person's possible window with buffer room — the
+   * caller queries Notion once with a wide enough date range (see
+   * /api/dashboard) and this function filters/aggregates per person from
+   * that single in-memory set. Never fetch per person.
    */
   logs: DailyLogEntry[];
   targets: TargetRow[];
@@ -467,7 +445,6 @@ export function buildDashboard(params: {
       attainmentPct,
       statusKey: status(att),
       channelsActive,
-      streak: computeStreak(personLogs, effectiveToday),
       sparkline,
       channelTags: assignedChannels,
       commentCount: personComments.length,

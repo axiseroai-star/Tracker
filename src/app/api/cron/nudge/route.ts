@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
         })
         .join(", ");
       await postToSlack(
-        `⏰ It's ${NUDGE_HOUR}:00 for ${mentions} and there's no output logged for today yet — a quick /log entry keeps the streak going.`
+        `⏰ It's ${NUDGE_HOUR}:00 for ${mentions} and there's no output logged for today yet — a quick /log entry closes it out.`
       );
     }
 

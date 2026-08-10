@@ -8,7 +8,6 @@ import {
   getInitials,
   rollingWindow,
   effectiveDate,
-  computeStreak,
   channelsForPerson,
   allKnownChannels,
   buildTrends,
@@ -140,32 +139,9 @@ test("effectiveDate: the same instant can land on different calendar days for di
   assert.equal(effectiveDate("Europe/Berlin", now), "2026-08-09");
 });
 
-// --- computeStreak (§16b) ---------------------------------------------------
-
 function log(id: string, date: string, archived = false): DailyLogEntry {
   return { id, person: "X", channel: "Y", date, outputCount: 1, archived };
 }
-
-test("computeStreak: consecutive days counting back from today", () => {
-  const logs = [log("a", "2026-08-08"), log("b", "2026-08-09"), log("c", "2026-08-10")];
-  assert.equal(computeStreak(logs, "2026-08-10"), 3);
-});
-
-test("computeStreak: stops at the first gap", () => {
-  const logs = [log("a", "2026-08-07"), log("b", "2026-08-09"), log("c", "2026-08-10")];
-  // Aug 8 is missing, so the streak only reaches back to Aug 9.
-  assert.equal(computeStreak(logs, "2026-08-10"), 2);
-});
-
-test("computeStreak: 0 if today itself has no entry yet", () => {
-  const logs = [log("a", "2026-08-08"), log("b", "2026-08-09")];
-  assert.equal(computeStreak(logs, "2026-08-10"), 0);
-});
-
-test("computeStreak: archived entries don't count", () => {
-  const logs = [log("a", "2026-08-09", true), log("b", "2026-08-10")];
-  assert.equal(computeStreak(logs, "2026-08-10"), 1);
-});
 
 // --- channelsForPerson / allKnownChannels (§18b) ----------------------------
 
@@ -237,7 +213,7 @@ test("buildChannelAverages: average daily output per person/channel over the win
 
 // --- buildDashboard (hand-computed example) --------------------------------
 
-test("buildDashboard: channelsActive, weekly totals, attainment, missedToday, streak", () => {
+test("buildDashboard: channelsActive, weekly totals, attainment, missedToday", () => {
   // Noon UTC on 2026-08-10 (a Monday) is safely past the cutoff in both
   // Karachi and Berlin, so everyone's effectiveToday is 2026-08-10 and the
   // window is 2026-08-04..2026-08-10 (5 working days).
@@ -250,7 +226,7 @@ test("buildDashboard: channelsActive, weekly totals, attainment, missedToday, st
       target("t2", "Ahsan Aftab", "WhatsApp"),
     ],
     logs: [
-      // Ahsan logs Cold Email on 3 days this week (consecutive Aug 8-10), WhatsApp on 1 day.
+      // Ahsan logs Cold Email on 4 days this week, WhatsApp on 1 day.
       { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-04", outputCount: 25 },
       { id: "l2", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-08", outputCount: 25 },
       { id: "l3", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-09", outputCount: 25 },
@@ -273,8 +249,6 @@ test("buildDashboard: channelsActive, weekly totals, attainment, missedToday, st
   assert.equal(ahsan.statusKey, "ON_TRACK");
   // channelsActive = Cold Email + WhatsApp = 2
   assert.equal(ahsan.channelsActive, 2);
-  // 3-day streak: Aug 8, 9, 10 consecutive.
-  assert.equal(ahsan.streak, 3);
 
   // Ahsan logged today (2026-08-10), so he should not be in missedToday.
   assert.ok(!result.missedToday.includes("Ahsan Aftab"));
@@ -283,7 +257,6 @@ test("buildDashboard: channelsActive, weekly totals, attainment, missedToday, st
   const abbas = result.people.find((p) => p.person === "Abbas Raza")!;
   assert.equal(abbas.statusKey, "NO_TARGET");
   assert.equal(abbas.attainmentPct, null);
-  assert.equal(abbas.streak, 0);
 
   assert.equal(result.kpi.teamOutputThisWeek, 105);
   assert.equal(result.isEmpty, false);
