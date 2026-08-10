@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Axisero Output Tracker — design tokens
+   Flat SaaS dashboard: one accent, status colors, no gradients.
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --page-bg: #f7f8fa;
+  --card-bg: #ffffff;
+  --line: #e5e7eb;
+
+  /* Ink */
+  --ink: #0f172a;
+  --ink-muted: #64748b;
+
+  /* Accent */
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+
+  /* Status */
+  --status-good: #16a34a;
+  --status-good-soft: #f0fdf4;
+  --status-behind: #d97706;
+  --status-behind-soft: #fffbeb;
+  --status-risk: #dc2626;
+  --status-risk-soft: #fef2f2;
+  --status-none: #64748b;
+  --status-none-soft: #f1f5f9;
+
+  --radius-card: 16px;
+}
+
+@theme inline {
+  --color-page: var(--page-bg);
+  --color-card: var(--card-bg);
+  --color-line: var(--line);
+
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-good: var(--status-good);
+  --color-good-soft: var(--status-good-soft);
+  --color-behind: var(--status-behind);
+  --color-behind-soft: var(--status-behind-soft);
+  --color-risk: var(--status-risk);
+  --color-risk-soft: var(--status-risk-soft);
+  --color-none: var(--status-none);
+  --color-none-soft: var(--status-none-soft);
+
+  --radius-card: var(--radius-card);
+
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--page-bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Skeleton loading shimmer */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.skeleton {
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  background-color: var(--line);
+  border-radius: 8px;
+}
