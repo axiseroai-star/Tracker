@@ -120,6 +120,26 @@ export async function requireAdminResponse(): Promise<NextResponse | null> {
   return null;
 }
 
+/**
+ * Guard for every /api/cron/* route handler (§16e/§16g) — these are hit by
+ * Vercel Cron, not a logged-in session, so they need their own check rather
+ * than requireAdminResponse. Vercel automatically sends
+ * `Authorization: Bearer $CRON_SECRET` when that env var is configured on
+ * the project. Missing CRON_SECRET fails closed (rejects everything) — an
+ * unset secret is a misconfiguration, not an "optional feature" state.
+ */
+export function requireCronSecretResponse(request: Request): NextResponse | null {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    console.error("CRON_SECRET is not configured — refusing to run a cron job.");
+    return NextResponse.json({ ok: false, error: "Not configured." }, { status: 500 });
+  }
+  if (request.headers.get("authorization") !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
+  }
+  return null;
+}
+
 /** Constant-time compare against a known-good value; false (never throws) if it's empty. */
 function matches(candidate: string, expected: string): boolean {
   if (!expected) return false;

@@ -73,6 +73,11 @@ export function effectiveDate(timeZone: string, now: Date = new Date()): string 
   return hour < DAY_CUTOFF_HOUR ? addDaysISO(localDate, -1) : localDate;
 }
 
+/** The raw local hour (0-23, no cutoff adjustment) in a timezone — §16g's nudge-hour check. */
+export function localHourIn(timeZone: string, now: Date = new Date()): number {
+  return Number(formatInTimeZone(now, timeZone, "HH"));
+}
+
 /** Count of Mon–Fri calendar dates between start and end, inclusive. */
 export function workingDays(startISO: string, endISO: string): number {
   let count = 0;

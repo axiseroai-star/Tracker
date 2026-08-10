@@ -21,6 +21,13 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // §16e/§16g: Vercel Cron requests carry no session cookie — they're
+  // protected by their own CRON_SECRET check inside the route instead, so
+  // they need to reach the route handler rather than bounce to /login.
+  if (pathname.startsWith("/api/cron/")) {
+    return NextResponse.next();
+  }
+
   const session = parseSessionToken(request.cookies.get(SESSION_COOKIE_NAME)?.value);
   if (!session) {
     const loginUrl = new URL("/login", request.url);
