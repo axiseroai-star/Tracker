@@ -81,6 +81,9 @@ export default function DashboardClient({ role }: { role: Role }) {
           <Link href="/trends" className="text-sm font-medium text-ink-muted hover:text-ink">
             Trends
           </Link>
+          <Link href="/meeting" className="text-sm font-medium text-ink-muted hover:text-ink">
+            Meeting view
+          </Link>
           {role === "admin" && (
             <Link href="/admin" className="text-sm font-medium text-ink-muted hover:text-ink">
               Admin
