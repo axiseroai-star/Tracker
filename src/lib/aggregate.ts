@@ -282,6 +282,7 @@ export interface DashboardPerson {
   statusKey: StatusKey;
   channelsActive: number;
   sparkline: number[]; // 7 values, oldest -> newest, aligned to this person's own window
+  dailyBreakdown: DailyBreakdownDay[]; // 7 entries, oldest -> newest, aligned to this person's own window (§23)
   channelTags: string[]; // this person's assigned (non-archived) channels
   commentCount: number; // = comments.length, kept as a field since it's read so often
   comments: PersonComment[]; // visible comments on this person's entries, newest first
@@ -292,6 +293,31 @@ export interface ChannelMatrixCell {
   channel: string;
   total: number;
   assigned: boolean; // whether this channel is in the person's current (non-archived) lineup
+}
+
+/** One channel's contribution to a day's total (§23 click-to-expand breakdown). */
+export interface DailyBreakdownChannel {
+  channel: string;
+  outputCount: number;
+}
+
+/**
+ * One day in a person's own rolling window (§23 "Daily breakdown grid").
+ * `target` is the sum of this person's (non-archived) assigned channels'
+ * Daily Target — the same figure every day, unlike `weeklyTargetTotal`
+ * which is scaled by working days. `hasEntries` is tracked separately from
+ * `actual` so a day nobody logged anything for can be told apart from a day
+ * that was logged but summed to zero — §23 calls for a distinct neutral
+ * treatment for the former rather than letting it read as "0%".
+ */
+export interface DailyBreakdownDay {
+  date: string; // YYYY-MM-DD, this person's own window date — not a shared axis (§14)
+  actual: number;
+  target: number;
+  attainmentPct: number | null; // null when target is 0, or nothing was logged
+  hasEntries: boolean;
+  statusKey: StatusKey | "NO_ENTRIES";
+  channels: DailyBreakdownChannel[]; // sorted by output desc; empty when hasEntries is false
 }
 
 export interface DashboardKpi {
@@ -419,6 +445,44 @@ export function buildDashboard(params: {
         .reduce((sum, l) => sum + l.outputCount, 0)
     );
 
+    // §23 "Daily breakdown grid" — grouped from `personWeekLogs` (already
+    // fetched/filtered above for the sparkline/weeklyTotal), never a second
+    // Notion query. `dailyTargetTotal` is the per-day equivalent of
+    // `weeklyTargetTotal` above, minus the working-days multiplier — it's
+    // the same figure every day, so it's hoisted out of the per-day map.
+    const dailyTargetTotal = assignedChannels.reduce(
+      (sum, channel) => sum + (personTargets?.get(channel) ?? 0),
+      0
+    );
+    const dailyBreakdown: DailyBreakdownDay[] = windowDates.map((date) => {
+      const dayLogs = personWeekLogs.filter((l) => l.date === date);
+      const hasEntries = dayLogs.length > 0;
+      const dayActual = dayLogs.reduce((sum, l) => sum + l.outputCount, 0);
+      // Only graded when something was actually logged that day — otherwise
+      // this would compute attainment(0, target) and read as a genuine 0%
+      // rather than "no entries", which is exactly the ambiguity §23 calls
+      // out to avoid.
+      const dayAtt = hasEntries ? attainment(dayActual, dailyTargetTotal) : null;
+
+      const channelTotals = new Map<string, number>();
+      for (const l of dayLogs) {
+        channelTotals.set(l.channel, (channelTotals.get(l.channel) ?? 0) + l.outputCount);
+      }
+      const channels = [...channelTotals.entries()]
+        .map(([channel, outputCount]) => ({ channel, outputCount }))
+        .sort((a, b) => b.outputCount - a.outputCount);
+
+      return {
+        date,
+        actual: dayActual,
+        target: dailyTargetTotal,
+        attainmentPct: dayAtt === null ? null : Math.round(dayAtt * 1000) / 10,
+        hasEntries,
+        statusKey: hasEntries ? status(dayAtt) : "NO_ENTRIES",
+        channels,
+      };
+    });
+
     if (!personLogs.some((l) => l.date === effectiveToday)) {
       missedToday.push(person);
     }
@@ -446,6 +510,7 @@ export function buildDashboard(params: {
       statusKey: status(att),
       channelsActive,
       sparkline,
+      dailyBreakdown,
       channelTags: assignedChannels,
       commentCount: personComments.length,
       comments: personComments,

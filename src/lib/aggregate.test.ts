@@ -300,6 +300,116 @@ test("buildDashboard: only the given (e.g. Active) roster is aggregated", () => 
   assert.equal(result.missedToday.length, 2);
 });
 
+// --- dailyBreakdown (§23) ---------------------------------------------------
+
+test("dailyBreakdown: 7 days oldest->newest, grouped actual/target/channels per day, no-entries days flagged", () => {
+  const now = new Date("2026-08-10T12:00:00Z"); // window: 2026-08-04..2026-08-10
+  const result = buildDashboard({
+    now,
+    people: TEST_PEOPLE,
+    targets: [
+      target("t1", "Ahsan Aftab", "Cold Email"), // dailyTarget: 10
+      target("t2", "Ahsan Aftab", "WhatsApp"), // dailyTarget: 10
+    ],
+    logs: [
+      // Aug 10: two channels, 25+5=30 vs target 20 -> 150% -> ON_TRACK.
+      { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-10", outputCount: 25 },
+      { id: "l2", person: "Ahsan Aftab", channel: "WhatsApp", date: "2026-08-10", outputCount: 5 },
+      // Aug 09: 8 vs target 20 -> 40% -> AT_RISK.
+      { id: "l3", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-09", outputCount: 8 },
+      // Aug 08: 15 vs target 20 -> 75% -> BEHIND.
+      { id: "l4", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-08", outputCount: 15 },
+      // Aug 04-07: nothing logged -> NO_ENTRIES, not a graded 0%.
+    ],
+  });
+
+  const ahsan = result.people.find((p) => p.person === "Ahsan Aftab")!;
+  const breakdown = ahsan.dailyBreakdown;
+
+  assert.equal(breakdown.length, 7);
+  assert.deepEqual(
+    breakdown.map((d) => d.date),
+    ["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10"]
+  );
+
+  const byDate = new Map(breakdown.map((d) => [d.date, d]));
+
+  const untouched = byDate.get("2026-08-05")!;
+  assert.equal(untouched.hasEntries, false);
+  assert.equal(untouched.actual, 0);
+  assert.equal(untouched.target, 20);
+  assert.equal(untouched.attainmentPct, null);
+  assert.equal(untouched.statusKey, "NO_ENTRIES");
+  assert.deepEqual(untouched.channels, []);
+
+  const atRisk = byDate.get("2026-08-09")!;
+  assert.equal(atRisk.hasEntries, true);
+  assert.equal(atRisk.actual, 8);
+  assert.equal(atRisk.attainmentPct, 40);
+  assert.equal(atRisk.statusKey, "AT_RISK");
+
+  const behind = byDate.get("2026-08-08")!;
+  assert.equal(behind.attainmentPct, 75);
+  assert.equal(behind.statusKey, "BEHIND");
+
+  const onTrack = byDate.get("2026-08-10")!;
+  assert.equal(onTrack.actual, 30);
+  assert.equal(onTrack.attainmentPct, 150);
+  assert.equal(onTrack.statusKey, "ON_TRACK");
+  // Multi-channel day -> breakdown lists both, sorted by output desc.
+  assert.deepEqual(onTrack.channels, [
+    { channel: "Cold Email", outputCount: 25 },
+    { channel: "WhatsApp", outputCount: 5 },
+  ]);
+});
+
+test("dailyBreakdown: same channel logged twice in one day sums into a single channel entry", () => {
+  const now = new Date("2026-08-10T12:00:00Z");
+  const result = buildDashboard({
+    now,
+    people: TEST_PEOPLE,
+    targets: [target("t1", "Ahsan Aftab", "Cold Email")],
+    logs: [
+      { id: "l1", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-10", outputCount: 4 },
+      { id: "l2", person: "Ahsan Aftab", channel: "Cold Email", date: "2026-08-10", outputCount: 6 },
+    ],
+  });
+  const ahsan = result.people.find((p) => p.person === "Ahsan Aftab")!;
+  const today = ahsan.dailyBreakdown.find((d) => d.date === "2026-08-10")!;
+  assert.equal(today.actual, 10);
+  assert.deepEqual(today.channels, [{ channel: "Cold Email", outputCount: 10 }]);
+});
+
+test("dailyBreakdown: a day with entries but no assigned target is NO_TARGET, not NO_ENTRIES", () => {
+  const now = new Date("2026-08-10T12:00:00Z");
+  const result = buildDashboard({
+    now,
+    people: TEST_PEOPLE,
+    targets: [], // no targets assigned at all
+    logs: [
+      { id: "l1", person: "Abbas Raza", channel: "Apollo", date: "2026-08-10", outputCount: 5 },
+    ],
+  });
+  const abbas = result.people.find((p) => p.person === "Abbas Raza")!;
+  const today = abbas.dailyBreakdown.find((d) => d.date === "2026-08-10")!;
+  assert.equal(today.hasEntries, true);
+  assert.equal(today.target, 0);
+  assert.equal(today.attainmentPct, null);
+  assert.equal(today.statusKey, "NO_TARGET");
+});
+
+test("dailyBreakdown: each row uses its own window dates, not one shared axis (§14c)", () => {
+  // Same instant, but Karachi has rolled to Aug 10 while Berlin hasn't (see
+  // the effectiveDate test above for the same fixture).
+  const now = new Date("2026-08-10T01:00:00Z");
+  const result = buildDashboard({ now, people: TEST_PEOPLE, targets: [], logs: [] });
+  const ahsan = result.people.find((p) => p.person === "Ahsan Aftab")!; // Europe/Berlin
+  const abbas = result.people.find((p) => p.person === "Abbas Raza")!; // Asia/Karachi
+
+  assert.equal(ahsan.dailyBreakdown.at(-1)!.date, "2026-08-09");
+  assert.equal(abbas.dailyBreakdown.at(-1)!.date, "2026-08-10");
+});
+
 test("buildDashboard: each person's window/effectiveToday is computed in their own timezone (§14c)", () => {
   // At this instant Karachi has already rolled over to Aug 10 (06:00 local,
   // past the cutoff), but Berlin hasn't crossed the 5am cutoff yet (03:00

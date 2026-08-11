@@ -7,6 +7,7 @@ import MissedTodayBanner from "@/components/MissedTodayBanner";
 import WeeklyBarChart from "@/components/WeeklyBarChart";
 import PersonCard from "@/components/PersonCard";
 import ChannelMatrix from "@/components/ChannelMatrix";
+import DailyBreakdownGrid from "@/components/DailyBreakdownGrid";
 import PersonCommentsModal from "@/components/PersonCommentsModal";
 import type { DashboardPerson, DashboardResult } from "@/lib/aggregate";
 
@@ -142,9 +143,18 @@ export default function DashboardClient({ person }: { person: string }) {
                 </div>
               </section>
 
-              <section className="rounded-card border border-line bg-card p-5">
+              <section className="mb-6 rounded-card border border-line bg-card p-5">
                 <h2 className="mb-4 text-sm font-semibold text-ink">Channel usage this week</h2>
                 <ChannelMatrix cells={data.channelMatrix} />
+              </section>
+
+              <section className="rounded-card border border-line bg-card p-5">
+                <h2 className="mb-1 text-sm font-semibold text-ink">Daily breakdown</h2>
+                <p className="mb-4 text-xs text-ink-muted">
+                  Each person&apos;s own last 7 days — click a cell to see which channels made up
+                  that day&apos;s number.
+                </p>
+                <DailyBreakdownGrid people={sortedPeople} />
               </section>
             </>
           )}
