@@ -10,6 +10,7 @@
     "test": "tsx --test src/lib/aggregate.test.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@notionhq/client": "^5.24.0",
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.4.0",
