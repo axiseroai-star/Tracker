@@ -56,6 +56,11 @@ export function ensurePipelineSchema(): Promise<void> {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
       `;
+      // Soft-delete (§ "Delete option"): an archived lead keeps its row —
+      // preserving the proof/audit trail is the point of this feature, so
+      // there is no DELETE statement anywhere for leads or touches.
+      // NULL = active, a timestamp = archived.
+      await q`ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`;
       await q`
         CREATE TABLE IF NOT EXISTS touches (
           id SERIAL PRIMARY KEY,
@@ -89,6 +94,8 @@ export interface Lead {
   status: PipelineStatus;
   createdAt: string;
   updatedAt: string;
+  /** null = active; a timestamp = archived (soft-deleted). Never hard-deleted. */
+  archivedAt: string | null;
 }
 
 export interface Touch {
@@ -115,6 +122,7 @@ function mapLeadRow(row: any): Lead {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at,
   };
 }
 
@@ -145,10 +153,16 @@ function isUniqueViolation(error: unknown): boolean {
 // Reads
 // ---------------------------------------------------------------------------
 
-/** Every lead, newest first — any authenticated session may read this (rule §2). */
+/**
+ * Every active (non-archived) lead, newest first — any authenticated
+ * session may read this (rule §2). Archived leads are excluded here, not
+ * filtered after the fact, so they simply never reach the board (rule §5 of
+ * the delete feature) — there is no separate "list archived" query since
+ * nothing in this feature restores or displays archived leads.
+ */
 export async function listLeads(): Promise<Lead[]> {
   await ensurePipelineSchema();
-  const rows = await sql()`SELECT * FROM leads ORDER BY created_at DESC`;
+  const rows = await sql()`SELECT * FROM leads WHERE archived_at IS NULL ORDER BY created_at DESC`;
   return rows.map(mapLeadRow);
 }
 
@@ -244,6 +258,20 @@ export async function takeOverLead(id: number): Promise<Lead | null> {
   await ensurePipelineSchema();
   const rows = await sql()`
     UPDATE leads SET status = 'Handed Off', updated_at = now() WHERE id = ${id} RETURNING *
+  `;
+  return rows[0] ? mapLeadRow(rows[0]) : null;
+}
+
+/**
+ * Soft-delete — sets archived_at, never removes the row (owner/admin only,
+ * caller enforces via requireOwnerOrAdmin). Allowed regardless of the
+ * lead's current status: this is for fixing mistakes, not a stage
+ * transition, so it doesn't go through nextStatusForOutcome() at all.
+ */
+export async function archiveLead(id: number): Promise<Lead | null> {
+  await ensurePipelineSchema();
+  const rows = await sql()`
+    UPDATE leads SET archived_at = now(), updated_at = now() WHERE id = ${id} RETURNING *
   `;
   return rows[0] ? mapLeadRow(rows[0]) : null;
 }

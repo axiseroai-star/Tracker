@@ -69,6 +69,23 @@ export default function PipelineBoard({
     }
   }
 
+  async function handleArchive(leadId: number) {
+    // Simple browser confirm, same pattern CommentPanel.tsx already uses for
+    // its own delete action — a soft-delete is still irreversible from the
+    // UI's point of view (no restore path), so it still needs a confirm step.
+    if (!window.confirm("Delete this lead? This can't be undone.")) return;
+    try {
+      const res = await fetch(`/api/pipeline/leads/${leadId}/archive`, { method: "POST" });
+      const result = await res.json();
+      if (!res.ok || !result.ok) throw new Error(result.error || "Failed to delete lead.");
+      // Archived leads never come back from GET /api/pipeline/leads — drop
+      // the card from the board immediately rather than waiting on a refetch.
+      setLeads((prev) => prev.filter((l) => l.id !== leadId));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to delete lead.");
+    }
+  }
+
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -141,6 +158,7 @@ export default function PipelineBoard({
                     isAdmin={role === "admin"}
                     onTouchLogged={handleTouchLogged}
                     onTakeOver={() => handleTakeOver(lead.id)}
+                    onArchive={() => handleArchive(lead.id)}
                   />
                 ))}
               </div>
@@ -158,18 +176,34 @@ function LeadCard({
   isAdmin,
   onTouchLogged,
   onTakeOver,
+  onArchive,
 }: {
   lead: LeadWithTouchToday;
   isOwner: boolean;
   isAdmin: boolean;
   onTouchLogged: (result: { touch: Touch; lead: Lead }) => void;
   onTakeOver: () => void;
+  onArchive: () => void;
 }) {
   const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(lead.status);
+  const canManage = isOwner || isAdmin;
 
   return (
     <div className="rounded-card border border-line bg-card p-4">
-      <p className="font-semibold text-ink">{lead.name}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-semibold text-ink">{lead.name}</p>
+        {canManage && (
+          <button
+            type="button"
+            onClick={onArchive}
+            aria-label="Delete lead"
+            title="Delete lead"
+            className="shrink-0 text-ink-muted hover:text-risk"
+          >
+            🗑
+          </button>
+        )}
+      </div>
       <p className="mt-0.5 text-xs text-ink-muted">
         {lead.source} · {lead.contactChannel}
       </p>

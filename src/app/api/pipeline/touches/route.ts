@@ -42,6 +42,13 @@ export async function POST(request: NextRequest) {
 
   // Rule §4: terminal states reject any further touch POSTs — a BD wanting
   // to re-approach creates a brand new lead row instead of reopening this one.
+  // An archived lead (soft-deleted) is blocked the same way.
+  if (lead.archivedAt !== null) {
+    return NextResponse.json(
+      { ok: false, error: "This lead has been deleted and can no longer be touched." },
+      { status: 403 }
+    );
+  }
   if (TERMINAL_STATUSES.includes(lead.status)) {
     return NextResponse.json(
       { ok: false, error: `This lead is ${lead.status} and can no longer be touched.` },
