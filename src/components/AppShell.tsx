@@ -20,6 +20,7 @@ import type { Role } from "@/lib/auth";
 const NAV_ITEMS: { href: string; label: string }[] = [
   { href: "/", label: "Dashboard" },
   { href: "/targets", label: "Targets" },
+  { href: "/pipeline", label: "Pipeline" },
   { href: "/trends", label: "Trends" },
   { href: "/meeting", label: "Meeting view" },
 ];

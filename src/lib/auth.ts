@@ -137,6 +137,24 @@ export async function requireAdminResponse(): Promise<NextResponse | null> {
 }
 
 /**
+ * Guard for Sales Pipeline write routes where a BD may only act on their own
+ * leads (an admin may act on anyone's) — call with the lead's `owner` field
+ * and return immediately if the result is non-null. Same shape as
+ * requireAdminResponse: re-checks the session server-side on every request,
+ * never trusts a client-supplied owner/role.
+ */
+export async function requireOwnerOrAdmin(leadOwner: string): Promise<NextResponse | null> {
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
+  }
+  if (session.role !== "admin" && session.person !== leadOwner) {
+    return NextResponse.json({ ok: false, error: "Forbidden." }, { status: 403 });
+  }
+  return null;
+}
+
+/**
  * Guard for every /api/cron/* route handler (§16e/§16g) — these are hit by
  * Vercel Cron, not a logged-in session, so they need their own check rather
  * than requireAdminResponse. Vercel automatically sends
