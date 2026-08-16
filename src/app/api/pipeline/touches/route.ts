@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { getSession, requireOwnerOrAdmin } from "@/lib/auth";
 import { queryAllPeople } from "@/lib/notion";
 import { effectiveDate } from "@/lib/aggregate";
-import { createTouch, DuplicateTouchError, getLeadById } from "@/lib/pipeline-db";
+import { createTouch, getLeadById } from "@/lib/pipeline-db";
 import { isPipelineOutcome, TERMINAL_STATUSES } from "@/lib/pipeline-constants";
 
 /**
@@ -86,11 +86,6 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ ok: true, touch, lead: updatedLead });
   } catch (error) {
-    // Rule §3: the DB's UNIQUE(lead_id, date) constraint is the source of
-    // truth — this catches the race rather than pre-checking then inserting.
-    if (error instanceof DuplicateTouchError) {
-      return NextResponse.json({ ok: false, error: "Already logged today." }, { status: 409 });
-    }
     console.error(
       "Failed to create touch:",
       error instanceof Error ? error.message : "unknown error"

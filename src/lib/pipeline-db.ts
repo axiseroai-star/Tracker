@@ -73,6 +73,10 @@ export function ensurePipelineSchema(): Promise<void> {
           UNIQUE (lead_id, date)
         )
       `;
+      // Same-day touches are now upserted (one row per lead per day, revisable
+      // until midnight) instead of insert-once-then-blocked — this tracks
+      // when that row was last revised, separately from created_at.
+      await q`ALTER TABLE touches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`;
     })();
   }
   return schemaReady;
@@ -106,6 +110,22 @@ export interface Touch {
   outcome: PipelineOutcome;
   notes: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * The neon serverless driver parses TIMESTAMPTZ columns into real JS `Date`
+ * objects (same reason `touches.date` needs its own to_char() cast — see
+ * TOUCH_COLUMNS below). A plain `NextResponse.json()` round-trip silently
+ * fixes this (JSON.stringify calls Date#toJSON internally), which is why
+ * this went unnoticed — but leads/touches are also handed to client
+ * components directly as Server Component props (see /pipeline's page.tsx),
+ * and that RSC serialization path preserves `Date` as `Date`, not string.
+ * Every Lead/Touch field typed `string` here must actually *be* a string
+ * before it leaves this module, regardless of which path it exits through.
+ */
+function toISOString(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -120,9 +140,9 @@ function mapLeadRow(row: any): Lead {
     notes: row.notes,
     owner: row.owner,
     status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    archivedAt: row.archived_at,
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at),
+    archivedAt: row.archived_at === null ? null : toISOString(row.archived_at),
   };
 }
 
@@ -135,18 +155,9 @@ function mapTouchRow(row: any): Touch {
     date: row.date,
     outcome: row.outcome,
     notes: row.notes,
-    createdAt: row.created_at,
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at),
   };
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  // Postgres error code for a UNIQUE constraint violation.
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "23505"
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +182,8 @@ export async function listLeads(): Promise<Lead[]> {
 // read-back timezone-dependent and liable to land on the wrong calendar day.
 // Every query touching `touches.date` selects it pre-formatted as text
 // instead, so what comes back is always the exact YYYY-MM-DD stored.
-const TOUCH_COLUMNS = "id, lead_id, bd_person, to_char(date, 'YYYY-MM-DD') AS date, outcome, notes, created_at";
+const TOUCH_COLUMNS =
+  "id, lead_id, bd_person, to_char(date, 'YYYY-MM-DD') AS date, outcome, notes, created_at, updated_at";
 
 /** Every touch — small table at this team's scale, fetched whole and filtered in memory by the caller. */
 export async function listTouches(): Promise<Touch[]> {
@@ -188,14 +200,18 @@ export async function getLeadById(id: number): Promise<Lead | null> {
 
 export interface LeadWithTouchToday extends Lead {
   hasTouchToday: boolean;
+  /** The lead's touch row for today, if any — lets the UI pre-fill/revise it (same-day touches are now editable). */
+  touchToday: Touch | null;
+  /** Most recent touch date across all history (YYYY-MM-DD), or null if never touched — for "days since last touch" displays. */
+  lastTouchDate: string | null;
 }
 
 /**
- * Annotates each lead with whether a touch already exists for its *owner's*
- * "today" — only the owner (or an admin acting for them) can ever touch a
- * lead, so that's whose day a touch would be filed under (rule §1). Pure/no
- * I/O, so both GET /api/pipeline/leads and the /pipeline page (which fetches
- * leads server-side directly, without going through the API route) share one
+ * Annotates each lead with today's touch (if any), for its *owner's* "today"
+ * — only the owner (or an admin acting for them) can ever touch a lead, so
+ * that's whose day a touch would be filed under (rule §1). Pure/no I/O, so
+ * both GET /api/pipeline/leads and the /pipeline page (which fetches leads
+ * server-side directly, without going through the API route) share one
  * implementation instead of two that could drift.
  */
 export function attachHasTouchToday(
@@ -214,8 +230,16 @@ export function attachHasTouchToday(
     const ownerTimezone = timezoneByPerson.get(lead.owner);
     const ownerToday = ownerTimezone ? effectiveDate(ownerTimezone) : null;
     const leadTouches = touchesByLead.get(lead.id) ?? [];
-    const hasTouchToday = ownerToday !== null && leadTouches.some((t) => t.date === ownerToday);
-    return { ...lead, hasTouchToday };
+    // One row per (lead_id, date): at most one touch can ever match today,
+    // however many times it's been revised — same-day updates never create
+    // a second row, so this can't inflate into more than one match.
+    const touchToday =
+      (ownerToday !== null && leadTouches.find((t) => t.date === ownerToday)) || null;
+    const lastTouchDate = leadTouches.reduce<string | null>(
+      (latest, t) => (latest === null || t.date > latest ? t.date : latest),
+      null
+    );
+    return { ...lead, hasTouchToday: touchToday !== null, touchToday, lastTouchDate };
   });
 }
 
@@ -276,8 +300,6 @@ export async function archiveLead(id: number): Promise<Lead | null> {
   return rows[0] ? mapLeadRow(rows[0]) : null;
 }
 
-export class DuplicateTouchError extends Error {}
-
 export interface CreateTouchInput {
   leadId: number;
   bdPerson: string;
@@ -306,11 +328,11 @@ function nextStatusForOutcome(
 }
 
 /**
- * Creates a touch and applies the resulting status update in the same call.
- * Relies on the DB's UNIQUE(lead_id, date) constraint as the source of truth
- * for "one touch per lead per day" (rule §3) — inserts optimistically and
- * translates a unique-violation into DuplicateTouchError, rather than
- * check-then-insert, which would race.
+ * Creates or revises today's touch and applies the resulting status update
+ * in the same call. One row per (lead_id, date) (rule §3): a second
+ * submission for the same lead on the same day upserts the existing row's
+ * outcome/notes/updated_at via ON CONFLICT (lead_id, date) DO UPDATE instead
+ * of being rejected — a later day still inserts a fresh row as before.
  *
  * Ownership, terminal-status, and channel checks are the caller's
  * responsibility (see /api/pipeline/touches) — this function only encodes
@@ -320,33 +342,33 @@ export async function createTouch(input: CreateTouchInput): Promise<{ touch: Tou
   await ensurePipelineSchema();
   const q = sql();
 
-  // Only `id`/`created_at` come back from RETURNING — `date` is known
-  // already (it's `input.date`, server-computed by the caller), so this
-  // sidesteps the DATE-column read-back timezone issue entirely rather than
-  // needing a to_char() cast here too.
-  let insertedRows;
-  try {
-    insertedRows = await q`
-      INSERT INTO touches (lead_id, bd_person, date, outcome, notes)
-      VALUES (${input.leadId}, ${input.bdPerson}, ${input.date}, ${input.outcome}, ${input.notes ?? null})
-      RETURNING id, created_at
-    `;
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new DuplicateTouchError("Already logged today");
-    }
-    throw error;
-  }
+  // `date` is known already (it's `input.date`, server-computed by the
+  // caller), so RETURNING skips it — sidesteps the DATE-column read-back
+  // timezone issue entirely rather than needing a to_char() cast here too.
+  const upsertedRows = await q`
+    INSERT INTO touches (lead_id, bd_person, date, outcome, notes)
+    VALUES (${input.leadId}, ${input.bdPerson}, ${input.date}, ${input.outcome}, ${input.notes ?? null})
+    ON CONFLICT (lead_id, date) DO UPDATE SET
+      outcome = EXCLUDED.outcome,
+      notes = EXCLUDED.notes,
+      updated_at = now()
+    RETURNING id, created_at, updated_at
+  `;
   const touch: Touch = {
-    id: insertedRows[0].id,
+    id: upsertedRows[0].id,
     leadId: input.leadId,
     bdPerson: input.bdPerson,
     date: input.date,
     outcome: input.outcome,
     notes: input.notes ?? null,
-    createdAt: insertedRows[0].created_at,
+    createdAt: toISOString(upsertedRows[0].created_at),
+    updatedAt: toISOString(upsertedRows[0].updated_at),
   };
 
+  // Still one row per (lead_id, date) after the upsert — a same-day revision
+  // updates this count's existing row rather than adding to it, so this
+  // stays an accurate "first touch ever" check on both the insert and
+  // same-day update paths.
   const countRows = await q`
     SELECT COUNT(*)::int AS count FROM touches WHERE lead_id = ${input.leadId}
   `;

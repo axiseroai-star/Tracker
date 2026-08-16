@@ -5,22 +5,23 @@ import { PIPELINE_OUTCOMES, type PipelineOutcome } from "@/lib/pipeline-constant
 import type { Lead, Touch } from "@/lib/pipeline-db";
 
 /**
- * Small inline form for logging a touch on a lead card. `hasTouchToday`
- * comes from the leads GET response (computed server-side via
- * effectiveDate()) — the disabled state is a UX nicety mirroring what the
- * server already enforces via UNIQUE(lead_id, date), not the source of truth.
+ * Small inline form for logging a touch on a lead card. `touchToday` comes
+ * from the leads GET response (computed server-side via effectiveDate()) —
+ * when set, today's touch already exists and is editable in place (same-day
+ * touches upsert server-side via ON CONFLICT (lead_id, date)), so the form
+ * pre-fills with it rather than disabling.
  */
 export default function LogTouchForm({
   leadId,
-  hasTouchToday,
+  touchToday,
   onLogged,
 }: {
   leadId: number;
-  hasTouchToday: boolean;
+  touchToday: Touch | null;
   onLogged: (result: { touch: Touch; lead: Lead }) => void;
 }) {
-  const [outcome, setOutcome] = useState<PipelineOutcome>(PIPELINE_OUTCOMES[0]);
-  const [notes, setNotes] = useState("");
+  const [outcome, setOutcome] = useState<PipelineOutcome>(touchToday?.outcome ?? PIPELINE_OUTCOMES[0]);
+  const [notes, setNotes] = useState(touchToday?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +39,6 @@ export default function LogTouchForm({
       if (!res.ok || !result.ok) {
         throw new Error(result.error || "Failed to log touch.");
       }
-      setNotes("");
       onLogged({ touch: result.touch, lead: result.lead });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to log touch.");
@@ -52,7 +52,7 @@ export default function LogTouchForm({
       <select
         value={outcome}
         onChange={(e) => setOutcome(e.target.value as PipelineOutcome)}
-        disabled={hasTouchToday}
+        disabled={submitting}
         className="h-10 w-full rounded-lg border border-line bg-page px-2.5 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {PIPELINE_OUTCOMES.map((o) => (
@@ -65,17 +65,17 @@ export default function LogTouchForm({
         rows={2}
         value={notes}
         onChange={(e) => setNotes(e.target.value)}
-        disabled={hasTouchToday}
+        disabled={submitting}
         placeholder="Notes (optional)"
         className="w-full rounded-lg border border-line bg-page px-2.5 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
       />
       {error && <p className="text-xs text-risk">{error}</p>}
       <button
         type="submit"
-        disabled={hasTouchToday || submitting}
+        disabled={submitting}
         className="flex h-9 w-full items-center justify-center rounded-lg bg-accent text-sm font-semibold text-white transition-opacity disabled:opacity-60"
       >
-        {hasTouchToday ? "Already logged today" : submitting ? "Saving…" : "Log touch"}
+        {submitting ? "Saving…" : touchToday ? "Update today's touch" : "Log touch"}
       </button>
     </form>
   );
