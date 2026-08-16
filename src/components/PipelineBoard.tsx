@@ -74,17 +74,28 @@ export default function PipelineBoard({
   /** This BD's own currently-loggable channels (§18b) — for the "Add lead" form. */
   channels: string[];
 }) {
+  const isAdmin = role === "admin";
+
   const [leads, setLeads] = useState(initialLeads);
-  const [scope, setScope] = useState<"mine" | "all">("mine");
+  const [scope, setScope] = useState<"mine" | "all" | "needsTakeover">("mine");
   const [groupBy, setGroupBy] = useState<"stage" | "person">("stage");
   const [viewMode, setViewMode] = useState<"board" | "table">("board");
   const [showAddForm, setShowAddForm] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const visibleLeads = useMemo(
-    () => (scope === "mine" ? leads.filter((l) => l.owner === sessionPerson) : leads),
-    [leads, scope, sessionPerson]
+  // Reuses the exact "Interested" condition the Take Over button itself
+  // gates on (see LeadDetail below) — a lead "needs takeover" precisely
+  // when that button would be showing for it, no separate status check.
+  const needsTakeoverCount = useMemo(
+    () => leads.filter((l) => l.status === "Interested").length,
+    [leads]
   );
+
+  const visibleLeads = useMemo(() => {
+    if (scope === "mine") return leads.filter((l) => l.owner === sessionPerson);
+    if (scope === "needsTakeover") return leads.filter((l) => l.status === "Interested");
+    return leads;
+  }, [leads, scope, sessionPerson]);
 
   // Board columns: either the fixed pipeline stages, or one column per
   // distinct owner among the currently visible leads (sorted alphabetically,
@@ -172,16 +183,21 @@ export default function PipelineBoard({
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-line bg-card p-1">
-            {(["mine", "all"] as const).map((s) => (
+            {(
+              isAdmin ? (["mine", "all", "needsTakeover"] as const) : (["mine", "all"] as const)
+            ).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setScope(s)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${
                   scope === s ? "bg-accent-soft text-accent" : "text-ink-muted hover:text-ink"
                 }`}
               >
-                {s === "mine" ? "My leads" : "All leads"}
+                {s === "mine" ? "My leads" : s === "all" ? "All leads" : "Needs takeover"}
+                {s === "needsTakeover" && (
+                  <span className="text-xs text-ink-muted">{needsTakeoverCount}</span>
+                )}
               </button>
             ))}
           </div>
@@ -269,7 +285,7 @@ export default function PipelineBoard({
                       key={lead.id}
                       lead={lead}
                       isOwner={lead.owner === sessionPerson}
-                      isAdmin={role === "admin"}
+                      isAdmin={isAdmin}
                       expanded={expandedId === lead.id}
                       onToggle={() => toggleExpanded(lead.id)}
                       onTouchLogged={handleTouchLogged}
