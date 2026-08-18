@@ -2,11 +2,17 @@
 
 import { Fragment, useMemo, useState } from "react";
 import type { Role } from "@/lib/auth";
-import type { Lead, LeadWithTouchToday, Touch } from "@/lib/pipeline-db";
-import { PIPELINE_STATUSES, TERMINAL_STATUSES, type PipelineStatus } from "@/lib/pipeline-constants";
+import type { Lead, LeadWithTouchToday, Touch, Transfer } from "@/lib/pipeline-db";
+import {
+  PIPELINE_STATUSES,
+  TERMINAL_STATUSES,
+  TRANSFERABLE_STATUSES,
+  type PipelineStatus,
+} from "@/lib/pipeline-constants";
 import AddLeadForm from "./AddLeadForm";
 import LogTouchForm from "./LogTouchForm";
 import PipelineAnalytics from "./PipelineAnalytics";
+import TransferLeadForm from "./TransferLeadForm";
 
 export type { LeadWithTouchToday } from "@/lib/pipeline-db";
 
@@ -66,6 +72,7 @@ export default function PipelineBoard({
   role,
   sessionPerson,
   channels,
+  activePeople,
 }: {
   initialLeads: LeadWithTouchToday[];
   /** Session role, passed down from the server page — same pattern AppShell.tsx uses for role-based rendering. */
@@ -73,6 +80,8 @@ export default function PipelineBoard({
   sessionPerson: string;
   /** This BD's own currently-loggable channels (§18b) — for the "Add lead" form. */
   channels: string[];
+  /** Every active person, sorted alphabetically — the Transfer form's "pick a new owner" dropdown source of truth. */
+  activePeople: string[];
 }) {
   const isAdmin = role === "admin";
 
@@ -128,7 +137,10 @@ export default function PipelineBoard({
   }, [columns, groupBy, boardLeads]);
 
   function handleLeadCreated(lead: Lead) {
-    setLeads((prev) => [{ ...lead, hasTouchToday: false, touchToday: null, lastTouchDate: null }, ...prev]);
+    setLeads((prev) => [
+      { ...lead, hasTouchToday: false, touchToday: null, lastTouchDate: null, transfers: [] },
+      ...prev,
+    ]);
     setShowAddForm(false);
   }
 
@@ -136,7 +148,17 @@ export default function PipelineBoard({
     setLeads((prev) =>
       prev.map((l) =>
         l.id === result.lead.id
-          ? { ...result.lead, hasTouchToday: true, touchToday: result.touch, lastTouchDate: result.touch.date }
+          ? { ...l, ...result.lead, hasTouchToday: true, touchToday: result.touch, lastTouchDate: result.touch.date }
+          : l
+      )
+    );
+  }
+
+  function handleTransferred(result: { lead: Lead; transfer: Transfer }) {
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === result.lead.id
+          ? { ...l, ...result.lead, transfers: [result.transfer, ...l.transfers] }
           : l
       )
     );
@@ -286,11 +308,13 @@ export default function PipelineBoard({
                       lead={lead}
                       isOwner={lead.owner === sessionPerson}
                       isAdmin={isAdmin}
+                      activePeople={activePeople}
                       expanded={expandedId === lead.id}
                       onToggle={() => toggleExpanded(lead.id)}
                       onTouchLogged={handleTouchLogged}
                       onTakeOver={() => handleTakeOver(lead.id)}
                       onArchive={() => handleArchive(lead.id)}
+                      onTransferred={handleTransferred}
                     />
                   ))}
                 </div>
@@ -303,11 +327,13 @@ export default function PipelineBoard({
           leads={visibleLeads}
           role={role}
           sessionPerson={sessionPerson}
+          activePeople={activePeople}
           expandedId={expandedId}
           onToggle={toggleExpanded}
           onTouchLogged={handleTouchLogged}
           onTakeOver={handleTakeOver}
           onArchive={handleArchive}
+          onTransferred={handleTransferred}
         />
       )}
     </div>
@@ -319,20 +345,24 @@ function LeadCard({
   lead,
   isOwner,
   isAdmin,
+  activePeople,
   expanded,
   onToggle,
   onTouchLogged,
   onTakeOver,
   onArchive,
+  onTransferred,
 }: {
   lead: LeadWithTouchToday;
   isOwner: boolean;
   isAdmin: boolean;
+  activePeople: string[];
   expanded: boolean;
   onToggle: () => void;
   onTouchLogged: (result: { touch: Touch; lead: Lead }) => void;
   onTakeOver: () => void;
   onArchive: () => void;
+  onTransferred: (result: { lead: Lead; transfer: Transfer }) => void;
 }) {
   return (
     <div className="rounded-card border border-line bg-card">
@@ -357,9 +387,11 @@ function LeadCard({
             lead={lead}
             isOwner={isOwner}
             isAdmin={isAdmin}
+            activePeople={activePeople}
             onTouchLogged={onTouchLogged}
             onTakeOver={onTakeOver}
             onArchive={onArchive}
+            onTransferred={onTransferred}
           />
         </div>
       )}
@@ -367,24 +399,32 @@ function LeadCard({
   );
 }
 
-/** Full detail — source, proof link, contact info, notes, take-over, delete, and the log-touch form. Shared by board cards and table rows. */
+/** Full detail — source, proof link, contact info, notes, take-over, delete, transfer, transfer history, and the log-touch form. Shared by board cards and table rows. */
 function LeadDetail({
   lead,
   isOwner,
   isAdmin,
+  activePeople,
   onTouchLogged,
   onTakeOver,
   onArchive,
+  onTransferred,
 }: {
   lead: LeadWithTouchToday;
   isOwner: boolean;
   isAdmin: boolean;
+  activePeople: string[];
   onTouchLogged: (result: { touch: Touch; lead: Lead }) => void;
   onTakeOver: () => void;
   onArchive: () => void;
+  onTransferred: (result: { lead: Lead; transfer: Transfer }) => void;
 }) {
   const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(lead.status);
   const canManage = isOwner || isAdmin;
+  // Transfer is open to everyone regardless of ownership (confirmed with
+  // the CEO) — the only gate here is the lead's status, same pattern as
+  // Take Over's own visibility being conditional on status below.
+  const canTransfer = (TRANSFERABLE_STATUSES as readonly string[]).includes(lead.status);
 
   return (
     <div>
@@ -430,8 +470,40 @@ function LeadDetail({
         )}
       </div>
 
+      {canTransfer && (
+        <TransferLeadForm
+          leadId={lead.id}
+          candidates={activePeople.filter((p) => p !== lead.owner)}
+          onTransferred={onTransferred}
+        />
+      )}
+
       {isOwner && !isTerminal && (
         <LogTouchForm leadId={lead.id} touchToday={lead.touchToday} onLogged={onTouchLogged} />
+      )}
+
+      {lead.transfers.length > 0 && (
+        <div className="mt-3 border-t border-line pt-3">
+          <p className="mb-1.5 text-xs font-medium text-ink-muted">Transfer history</p>
+          <ul className="space-y-1.5">
+            {lead.transfers.map((t) => (
+              <li key={t.id} className="rounded-lg bg-page p-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-ink">
+                    {t.fromOwner} → {t.toOwner}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-ink-muted">
+                    {new Date(t.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-ink-muted">
+                  by {t.transferredBy}
+                  {t.note && <> — “{t.note}”</>}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -444,20 +516,24 @@ function PipelineTable({
   leads,
   role,
   sessionPerson,
+  activePeople,
   expandedId,
   onToggle,
   onTouchLogged,
   onTakeOver,
   onArchive,
+  onTransferred,
 }: {
   leads: LeadWithTouchToday[];
   role: Role;
   sessionPerson: string;
+  activePeople: string[];
   expandedId: number | null;
   onToggle: (leadId: number) => void;
   onTouchLogged: (result: { touch: Touch; lead: Lead }) => void;
   onTakeOver: (leadId: number) => void;
   onArchive: (leadId: number) => void;
+  onTransferred: (result: { lead: Lead; transfer: Transfer }) => void;
 }) {
   const [ownerFilter, setOwnerFilter] = useState<string>("all");
   const [stageFilter, setStageFilter] = useState<string>("all");
@@ -597,9 +673,11 @@ function PipelineTable({
                         lead={lead}
                         isOwner={lead.owner === sessionPerson}
                         isAdmin={role === "admin"}
+                        activePeople={activePeople}
                         onTouchLogged={onTouchLogged}
                         onTakeOver={() => onTakeOver(lead.id)}
                         onArchive={() => onArchive(lead.id)}
+                        onTransferred={onTransferred}
                       />
                     </td>
                   </tr>

@@ -3,7 +3,13 @@ import PipelineBoard from "@/components/PipelineBoard";
 import { getSession } from "@/lib/auth";
 import { queryAllPeople, queryAllTargets } from "@/lib/notion";
 import { channelsForPerson } from "@/lib/aggregate";
-import { attachHasTouchToday, listLeads, listTouches, type LeadWithTouchToday } from "@/lib/pipeline-db";
+import {
+  attachHasTouchToday,
+  listLeads,
+  listTouches,
+  listTransfers,
+  type LeadWithTouchToday,
+} from "@/lib/pipeline-db";
 
 // Server Component: resolves the session server-side (§20c), fetches leads
 // and this BD's own loggable channels server-side, and hands both to the
@@ -15,19 +21,27 @@ export default async function PipelinePage() {
 
   let leads: LeadWithTouchToday[] = [];
   let channels: string[] = [];
+  let activePeople: string[] = [];
   let loadError: string | null = null;
   try {
-    const [allLeads, allTouches, targets, people] = await Promise.all([
+    const [allLeads, allTouches, allTransfers, targets, people] = await Promise.all([
       listLeads(),
       listTouches(),
+      listTransfers(),
       queryAllTargets(),
       queryAllPeople(),
     ]);
 
     channels = channelsForPerson(session.person, targets);
+    // Transfer's "pick a new owner" dropdown draws from this same real,
+    // active-people source of truth — never a free-text name (rule §1).
+    activePeople = people
+      .filter((p) => p.active)
+      .map((p) => p.name)
+      .sort((a, b) => a.localeCompare(b));
 
     const timezoneByPerson = new Map(people.map((p) => [p.name, p.timezone]));
-    leads = attachHasTouchToday(allLeads, allTouches, timezoneByPerson);
+    leads = attachHasTouchToday(allLeads, allTouches, timezoneByPerson, allTransfers);
   } catch (error) {
     console.error(
       "Failed to load /pipeline data:",
@@ -52,6 +66,7 @@ export default async function PipelinePage() {
           role={session.role}
           sessionPerson={session.person}
           channels={channels}
+          activePeople={activePeople}
         />
       )}
     </main>

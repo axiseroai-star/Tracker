@@ -3,7 +3,14 @@ import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { queryAllPeople, queryAllTargets } from "@/lib/notion";
 import { channelsForPerson } from "@/lib/aggregate";
-import { attachHasTouchToday, createLead, listLeads, listTouches, type Lead } from "@/lib/pipeline-db";
+import {
+  attachHasTouchToday,
+  createLead,
+  listLeads,
+  listTouches,
+  listTransfers,
+  type Lead,
+} from "@/lib/pipeline-db";
 import { isPipelineSource } from "@/lib/pipeline-constants";
 
 /**
@@ -22,14 +29,15 @@ export async function GET() {
   }
 
   try {
-    const [leads, touches, people] = await Promise.all([
+    const [leads, touches, transfers, people] = await Promise.all([
       listLeads(),
       listTouches(),
+      listTransfers(),
       queryAllPeople(),
     ]);
 
     const timezoneByPerson = new Map(people.map((p) => [p.name, p.timezone]));
-    const result = attachHasTouchToday(leads, touches, timezoneByPerson);
+    const result = attachHasTouchToday(leads, touches, timezoneByPerson, transfers);
 
     return NextResponse.json({ ok: true, leads: result });
   } catch (error) {

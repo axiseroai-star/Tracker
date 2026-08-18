@@ -2,7 +2,7 @@ import "server-only";
 
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { effectiveDate } from "./aggregate";
-import type { PipelineOutcome, PipelineSource, PipelineStatus } from "./pipeline-constants";
+import { TRANSFERABLE_STATUSES, type PipelineOutcome, type PipelineSource, type PipelineStatus } from "./pipeline-constants";
 
 /**
  * Sales Pipeline (leads/touches) — Postgres via Neon's HTTP driver, the same
@@ -77,6 +77,20 @@ export function ensurePipelineSchema(): Promise<void> {
       // until midnight) instead of insert-once-then-blocked — this tracks
       // when that row was last revised, separately from created_at.
       await q`ALTER TABLE touches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`;
+      // Transfer feature — permanent, append-only audit log of ownership
+      // changes. Same "never hard-delete" philosophy as leads/touches: no
+      // UPDATE or DELETE statement anywhere touches this table, ever.
+      await q`
+        CREATE TABLE IF NOT EXISTS transfers (
+          id SERIAL PRIMARY KEY,
+          lead_id INTEGER NOT NULL REFERENCES leads(id),
+          from_owner TEXT NOT NULL,
+          to_owner TEXT NOT NULL,
+          transferred_by TEXT NOT NULL,
+          note TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
     })();
   }
   return schemaReady;
@@ -111,6 +125,17 @@ export interface Touch {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Transfer {
+  id: number;
+  leadId: number;
+  fromOwner: string;
+  toOwner: string;
+  /** The session person who actually performed the transfer — may differ from fromOwner (anyone can transfer anyone's lead). */
+  transferredBy: string;
+  note: string | null;
+  createdAt: string;
 }
 
 /**
@@ -160,6 +185,19 @@ function mapTouchRow(row: any): Touch {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapTransferRow(row: any): Transfer {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    fromOwner: row.from_owner,
+    toOwner: row.to_owner,
+    transferredBy: row.transferred_by,
+    note: row.note,
+    createdAt: toISOString(row.created_at),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -198,32 +236,51 @@ export async function getLeadById(id: number): Promise<Lead | null> {
   return rows[0] ? mapLeadRow(rows[0]) : null;
 }
 
+/** Every transfer — small table at this team's scale, fetched whole and filtered in memory by the caller (same pattern as listTouches). */
+export async function listTransfers(): Promise<Transfer[]> {
+  await ensurePipelineSchema();
+  const rows = await sql()`SELECT * FROM transfers ORDER BY created_at DESC`;
+  return rows.map(mapTransferRow);
+}
+
 export interface LeadWithTouchToday extends Lead {
   hasTouchToday: boolean;
   /** The lead's touch row for today, if any — lets the UI pre-fill/revise it (same-day touches are now editable). */
   touchToday: Touch | null;
   /** Most recent touch date across all history (YYYY-MM-DD), or null if never touched — for "days since last touch" displays. */
   lastTouchDate: string | null;
+  /** This lead's full transfer history, newest first — the append-only audit log surfaced in the UI's expanded detail view. */
+  transfers: Transfer[];
 }
 
 /**
- * Annotates each lead with today's touch (if any), for its *owner's* "today"
- * — only the owner (or an admin acting for them) can ever touch a lead, so
- * that's whose day a touch would be filed under (rule §1). Pure/no I/O, so
- * both GET /api/pipeline/leads and the /pipeline page (which fetches leads
- * server-side directly, without going through the API route) share one
- * implementation instead of two that could drift.
+ * Annotates each lead with today's touch (if any) and its transfer history.
+ * "Today" is computed from the *owner's* timezone — only the owner (or an
+ * admin acting for them) can ever touch a lead, so that's whose day a touch
+ * would be filed under (rule §1). Pure/no I/O, so both GET /api/pipeline/leads
+ * and the /pipeline page (which fetches leads server-side directly, without
+ * going through the API route) share one implementation instead of two that
+ * could drift. `transfers` defaults to `[]` so existing callers that haven't
+ * been updated to fetch it yet don't break.
  */
 export function attachHasTouchToday(
   leads: Lead[],
   touches: Touch[],
-  timezoneByPerson: Map<string, string>
+  timezoneByPerson: Map<string, string>,
+  transfers: Transfer[] = []
 ): LeadWithTouchToday[] {
   const touchesByLead = new Map<number, Touch[]>();
   for (const touch of touches) {
     const list = touchesByLead.get(touch.leadId) ?? [];
     list.push(touch);
     touchesByLead.set(touch.leadId, list);
+  }
+
+  const transfersByLead = new Map<number, Transfer[]>();
+  for (const transfer of transfers) {
+    const list = transfersByLead.get(transfer.leadId) ?? [];
+    list.push(transfer);
+    transfersByLead.set(transfer.leadId, list);
   }
 
   return leads.map((lead) => {
@@ -239,7 +296,19 @@ export function attachHasTouchToday(
       (latest, t) => (latest === null || t.date > latest ? t.date : latest),
       null
     );
-    return { ...lead, hasTouchToday: touchToday !== null, touchToday, lastTouchDate };
+    // listTransfers() already orders by created_at DESC, but re-sort here
+    // too since this function's contract shouldn't silently depend on the
+    // caller having fetched transfers in a particular order.
+    const leadTransfers = (transfersByLead.get(lead.id) ?? [])
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return {
+      ...lead,
+      hasTouchToday: touchToday !== null,
+      touchToday,
+      lastTouchDate,
+      transfers: leadTransfers,
+    };
   });
 }
 
@@ -387,4 +456,84 @@ export async function createTouch(input: CreateTouchInput): Promise<{ touch: Tou
   }
 
   return { touch, lead };
+}
+
+export class TransferNotEligibleError extends Error {}
+
+export interface TransferLeadInput {
+  leadId: number;
+  /** The lead's owner immediately before this transfer — also a race guard, see below. */
+  fromOwner: string;
+  toOwner: string;
+  /** session.person who actually performed the transfer — may differ from fromOwner (rule: anyone can transfer anyone's lead). */
+  transferredBy: string;
+  note?: string;
+}
+
+/**
+ * Transfers a lead to a new owner and appends one `transfers` audit row,
+ * atomically (rule §5: never an owner change without a matching log row, or
+ * vice versa). Two statements run inside one Postgres transaction via the
+ * driver's transaction() — the INSERT's `WHERE EXISTS` re-reads `leads`
+ * *within that same transaction*, so it only fires if the UPDATE actually
+ * changed the row; if the UPDATE's WHERE clause didn't match anything, the
+ * INSERT correctly no-ops too, and the whole transaction rolls back to
+ * nothing.
+ *
+ * The UPDATE's WHERE clause (current owner + status + not archived) is a
+ * *race guard*, not the primary validation — the caller (the transfer API
+ * route) is expected to have already checked lead existence, archived
+ * status, transferable status, and toOwner eligibility, and to have
+ * produced a specific, friendly error for each. If this still returns zero
+ * rows, something about the lead changed between that check and this write
+ * (e.g. someone else transferred or archived it a moment earlier), so this
+ * throws a generic TransferNotEligibleError for the route to turn into a
+ * clean 400 rather than silently doing nothing or throwing an opaque 500.
+ *
+ * The fromOwner === toOwner check below is deliberately duplicated here,
+ * not just left to the API route/UI dropdown: without it, the UPDATE's
+ * WHERE clause (`owner = fromOwner`) still matches trivially when
+ * toOwner equals fromOwner too, which would silently write a no-op
+ * transfers row (from_owner === to_owner) for any caller that bypasses the
+ * route's own check — e.g. a direct API call.
+ */
+export async function transferLead(
+  input: TransferLeadInput
+): Promise<{ lead: Lead; transfer: Transfer }> {
+  await ensurePipelineSchema();
+
+  if (input.fromOwner === input.toOwner) {
+    throw new TransferNotEligibleError("Lead is already assigned to this person.");
+  }
+
+  const q = sql();
+
+  const statusList = TRANSFERABLE_STATUSES as readonly string[];
+  const [updatedRows, insertedRows] = await q.transaction([
+    q`
+      UPDATE leads
+      SET owner = ${input.toOwner}, updated_at = now()
+      WHERE id = ${input.leadId}
+        AND owner = ${input.fromOwner}
+        AND status = ANY(${statusList})
+        AND archived_at IS NULL
+      RETURNING *
+    `,
+    q`
+      INSERT INTO transfers (lead_id, from_owner, to_owner, transferred_by, note)
+      SELECT ${input.leadId}, ${input.fromOwner}, ${input.toOwner}, ${input.transferredBy}, ${input.note ?? null}
+      WHERE EXISTS (
+        SELECT 1 FROM leads WHERE id = ${input.leadId} AND owner = ${input.toOwner}
+      )
+      RETURNING *
+    `,
+  ]);
+
+  if (updatedRows.length === 0 || insertedRows.length === 0) {
+    throw new TransferNotEligibleError(
+      "This lead is no longer eligible to transfer — it may have changed since you loaded this page."
+    );
+  }
+
+  return { lead: mapLeadRow(updatedRows[0]), transfer: mapTransferRow(insertedRows[0]) };
 }
