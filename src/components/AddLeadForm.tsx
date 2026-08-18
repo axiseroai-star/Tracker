@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { PIPELINE_SOURCES, type PipelineSource } from "@/lib/pipeline-constants";
+import { COUNTRY_OPTIONS } from "@/lib/pipeline-countries";
 import type { Lead } from "@/lib/pipeline-db";
 
 /**
@@ -26,6 +27,8 @@ export default function AddLeadForm({
   const [proofLink, setProofLink] = useState("");
   const [contactChannel, setContactChannel] = useState(channels[0] ?? "");
   const [contactInfo, setContactInfo] = useState("");
+  const [country, setCountry] = useState("");
+  const [countryOther, setCountryOther] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -46,6 +49,14 @@ export default function AddLeadForm({
       setFieldError("Contact info is required.");
       return;
     }
+    if (country.trim().length === 0) {
+      setFieldError("Country is required.");
+      return;
+    }
+    if (country === "Other" && countryOther.trim().length === 0) {
+      setFieldError("Enter the country name.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -58,6 +69,8 @@ export default function AddLeadForm({
           proofLink: proofLink.trim(),
           contactChannel,
           contactInfo: contactInfo.trim(),
+          country,
+          countryOther: country === "Other" ? countryOther.trim() : undefined,
           notes: notes.trim() || undefined,
         }),
       });
@@ -163,6 +176,41 @@ export default function AddLeadForm({
           placeholder="Phone, email, handle…"
           className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
         />
+      </div>
+
+      <div>
+        <label htmlFor="lead-country" className="mb-1.5 block text-sm font-medium text-ink">
+          Country
+        </label>
+        <select
+          id="lead-country"
+          required
+          value={country}
+          onChange={(e) => {
+            setCountry(e.target.value);
+            if (e.target.value !== "Other") setCountryOther("");
+          }}
+          className="h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+        >
+          <option value="" disabled>
+            Select a country…
+          </option>
+          {COUNTRY_OPTIONS.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+          <option value="Other">Other</option>
+        </select>
+        {country === "Other" && (
+          <input
+            type="text"
+            value={countryOther}
+            onChange={(e) => setCountryOther(e.target.value)}
+            placeholder="Enter the country name"
+            className="mt-2 h-12 w-full rounded-lg border border-line bg-page px-3 text-base text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+          />
+        )}
       </div>
 
       {fieldError && <p className="-mt-3 text-sm text-risk">{fieldError}</p>}

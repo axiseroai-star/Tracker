@@ -55,6 +55,13 @@ function daysSinceLabel(dateISO: string | null): string {
   return `${diffDays} days ago`;
 }
 
+/** null = a pre-country-feature lead — display as "Unknown", never blank/undefined. "Other" surfaces the BD's typed-in name alongside it. */
+function countryLabel(lead: Pick<Lead, "country" | "countryOther">): string {
+  if (!lead.country) return "Unknown";
+  if (lead.country === "Other") return `Other — ${lead.countryOther ?? "Unknown"}`;
+  return lead.country;
+}
+
 function StageBadge({ status }: { status: PipelineStatus }) {
   const meta = STAGE_COLORS[status];
   return (
@@ -432,6 +439,7 @@ function LeadDetail({
         {lead.source} · {lead.contactChannel}
         {!isOwner && ` · Owner: ${lead.owner}`}
       </p>
+      <p className="mt-0.5 text-xs text-ink-muted">Country: {countryLabel(lead)}</p>
 
       <div className="mt-2 flex flex-wrap gap-1.5">
         <a

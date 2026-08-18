@@ -12,6 +12,7 @@ import {
   type Lead,
 } from "@/lib/pipeline-db";
 import { isPipelineSource } from "@/lib/pipeline-constants";
+import { COUNTRY_NAMES } from "@/lib/pipeline-countries";
 
 /**
  * GET — any authenticated session (BD or admin) can read every lead (rule
@@ -63,10 +64,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const { name, source, proofLink, contactChannel, contactInfo, notes } = (body ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const { name, source, proofLink, contactChannel, contactInfo, notes, country, countryOther } =
+    (body ?? {}) as Record<string, unknown>;
 
   if (typeof name !== "string" || name.trim().length === 0) {
     return NextResponse.json({ ok: false, error: "A lead name is required." }, { status: 400 });
@@ -110,6 +109,35 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Notes must be text." }, { status: 400 });
   }
 
+  // Country feature, stage 1 (§Ahsan) — required for new leads only;
+  // pre-existing leads keep NULL/NULL and are entirely unaffected by this
+  // check. Validated against the same COUNTRY_NAMES list the dropdown
+  // itself is built from (pipeline-countries.ts) — no second hardcoded list.
+  if (typeof country !== "string" || country.trim().length === 0) {
+    return NextResponse.json({ ok: false, error: "A country is required." }, { status: 400 });
+  }
+  const isKnownCountry = (COUNTRY_NAMES as readonly string[]).includes(country);
+  if (!isKnownCountry && country !== "Other") {
+    return NextResponse.json({ ok: false, error: "Choose a valid country from the list." }, { status: 400 });
+  }
+  if (country === "Other") {
+    if (typeof countryOther !== "string" || countryOther.trim().length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "Enter the country name when selecting Other." },
+        { status: 400 }
+      );
+    }
+  } else if (
+    countryOther !== undefined &&
+    countryOther !== null &&
+    !(typeof countryOther === "string" && countryOther.trim().length === 0)
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "Country details can only be set when country is Other." },
+      { status: 400 }
+    );
+  }
+
   try {
     const lead: Lead = await createLead({
       name: name.trim(),
@@ -119,6 +147,11 @@ export async function POST(request: NextRequest) {
       contactInfo: contactInfo.trim(),
       notes: typeof notes === "string" && notes.trim() ? notes.trim().slice(0, 2000) : undefined,
       owner: session.person,
+      country,
+      countryOther:
+        country === "Other" && typeof countryOther === "string"
+          ? countryOther.trim().slice(0, 200)
+          : undefined,
     });
     return NextResponse.json({ ok: true, lead });
   } catch (error) {

@@ -91,6 +91,12 @@ export function ensurePipelineSchema(): Promise<void> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
       `;
+      // Country feature, stage 1 (§Ahsan). Both nullable, no backfill —
+      // existing leads simply have NULL for both, displayed as "Unknown"
+      // wherever shown. Required only for newly-created leads, enforced in
+      // the leads POST route, not at the schema level.
+      await q`ALTER TABLE leads ADD COLUMN IF NOT EXISTS country TEXT`;
+      await q`ALTER TABLE leads ADD COLUMN IF NOT EXISTS country_other TEXT`;
     })();
   }
   return schemaReady;
@@ -114,6 +120,10 @@ export interface Lead {
   updatedAt: string;
   /** null = active; a timestamp = archived (soft-deleted). Never hard-deleted. */
   archivedAt: string | null;
+  /** Raw topojson country name (pipeline-countries.ts COUNTRY_NAMES) or "Other"; null = not specified (pre-existing lead), display as "Unknown". */
+  country: string | null;
+  /** The BD's typed-in country name — set only when country === "Other", null otherwise. */
+  countryOther: string | null;
 }
 
 export interface Touch {
@@ -168,6 +178,8 @@ function mapLeadRow(row: any): Lead {
     createdAt: toISOString(row.created_at),
     updatedAt: toISOString(row.updated_at),
     archivedAt: row.archived_at === null ? null : toISOString(row.archived_at),
+    country: row.country,
+    countryOther: row.country_other,
   };
 }
 
@@ -324,13 +336,17 @@ export interface CreateLeadInput {
   contactInfo: string;
   notes?: string;
   owner: string;
+  /** Required for new leads (validated by the caller against pipeline-countries.ts COUNTRY_NAMES, or "Other"). */
+  country: string;
+  /** Required when country === "Other"; must be omitted/null otherwise. Validated by the caller. */
+  countryOther?: string | null;
 }
 
 /** Lead created → status = 'New'. */
 export async function createLead(input: CreateLeadInput): Promise<Lead> {
   await ensurePipelineSchema();
   const rows = await sql()`
-    INSERT INTO leads (name, source, proof_link, contact_channel, contact_info, notes, owner, status)
+    INSERT INTO leads (name, source, proof_link, contact_channel, contact_info, notes, owner, status, country, country_other)
     VALUES (
       ${input.name},
       ${input.source},
@@ -339,7 +355,9 @@ export async function createLead(input: CreateLeadInput): Promise<Lead> {
       ${input.contactInfo},
       ${input.notes ?? null},
       ${input.owner},
-      'New'
+      'New',
+      ${input.country},
+      ${input.countryOther ?? null}
     )
     RETURNING *
   `;
