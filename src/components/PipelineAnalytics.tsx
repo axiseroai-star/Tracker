@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import KpiCard from "./KpiCard";
 import { COLUMNS } from "./PipelineBoard";
+import CountryVolumeChart from "./CountryVolumeChart";
 import type { LeadWithTouchToday } from "@/lib/pipeline-db";
 
 /**
@@ -111,6 +112,11 @@ export default function PipelineAnalytics({ leads }: { leads: LeadWithTouchToday
             </ResponsiveContainer>
           </div>
         )}
+      </section>
+
+      <section className="rounded-card border border-line bg-card p-5">
+        <h2 className="mb-4 text-sm font-semibold text-ink">Leads by country</h2>
+        <CountryVolumeChart leads={leads} />
       </section>
     </div>
   );

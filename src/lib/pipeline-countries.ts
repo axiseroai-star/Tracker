@@ -64,3 +64,8 @@ export const COUNTRY_OPTIONS: { value: string; label: string }[] = rawNames
 
 /** Raw topojson names only, derived from COUNTRY_OPTIONS — the single source of truth for server-side validation. */
 export const COUNTRY_NAMES: string[] = COUNTRY_OPTIONS.map((o) => o.value);
+
+/** Friendly display label for a raw topojson country name — same alias map the dropdown uses, so the map's tooltip reads the same way. */
+export function countryDisplayLabel(rawName: string): string {
+  return DISPLAY_ALIASES[rawName] ?? rawName;
+}
